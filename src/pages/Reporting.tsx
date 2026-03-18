@@ -104,7 +104,7 @@ export function Reporting() {
   }).filter(c => c.percentage < 100).sort((a, b) => a.percentage - b.percentage).slice(0, 10)
 
   return (
-    <div className="p-8 max-w-6xl">
+    <div className="p-8 max-w-6xl mx-auto">
       {/* Header */}
       <div className="mb-8">
         <div className="flex items-center gap-3 mb-2">

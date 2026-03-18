@@ -30,7 +30,7 @@ export function Dashboard() {
     : sites
 
   return (
-    <div className="p-8 space-y-8">
+    <div className="p-8 space-y-8 max-w-7xl mx-auto">
       {/* KPIs */}
       <div className="grid grid-cols-4 gap-5">
         <StatCard

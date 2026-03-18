@@ -1,5 +1,5 @@
 import { useSearchParams, useNavigate } from "react-router-dom"
-import { Search, X, Calendar, ChevronRight, Filter, FileEdit, Bell, ChevronDown } from "lucide-react"
+import { Search, X, Calendar, ChevronRight, Filter, FileEdit, Bell, ChevronDown, Clock } from "lucide-react"
 import { useState, useMemo, useRef, useEffect } from "react"
 import { useArticles, useClusters, useSites } from "@/hooks"
 import { useSiteContext } from "@/lib/SiteContext"
@@ -24,7 +24,7 @@ function isOlderThanOneYear(dateString: string): boolean {
   return date < oneYearAgo
 }
 
-type FilterType = "all" | "drafts" | "signals" | "outdated"
+type FilterType = "drafts" | "signals" | "outdated"
 
 export function WorkQueue() {
   const [searchParams, setSearchParams] = useSearchParams()
@@ -33,7 +33,7 @@ export function WorkQueue() {
   
   const clusterId = searchParams.get("clusterId") ?? undefined
   const [searchQuery, setSearchQuery] = useState("")
-  const [activeFilter, setActiveFilter] = useState<FilterType>("all")
+  const [activeFilters, setActiveFilters] = useState<Set<FilterType>>(new Set())
   const [clusterDropdownOpen, setClusterDropdownOpen] = useState(false)
   const clusterDropdownRef = useRef<HTMLDivElement>(null)
 
@@ -56,6 +56,22 @@ export function WorkQueue() {
     return () => document.removeEventListener("mousedown", handleClickOutside)
   }, [])
 
+  const toggleFilter = (filter: FilterType) => {
+    setActiveFilters(prev => {
+      const next = new Set(prev)
+      if (next.has(filter)) {
+        next.delete(filter)
+      } else {
+        next.add(filter)
+      }
+      return next
+    })
+  }
+
+  const clearFilters = () => {
+    setActiveFilters(new Set())
+  }
+
   const filteredArticles = useMemo(() => {
     if (!articles) return []
     
@@ -67,20 +83,18 @@ export function WorkQueue() {
       )
     }
 
-    switch (activeFilter) {
-      case "drafts":
-        result = result.filter(a => a.hasDraft)
-        break
-      case "signals":
-        result = result.filter(a => a.hasSignals)
-        break
-      case "outdated":
-        result = result.filter(a => isOlderThanOneYear(a.lastModifiedAt))
-        break
+    if (activeFilters.has("drafts")) {
+      result = result.filter(a => a.hasDraft)
+    }
+    if (activeFilters.has("signals")) {
+      result = result.filter(a => a.hasSignals)
+    }
+    if (activeFilters.has("outdated")) {
+      result = result.filter(a => isOlderThanOneYear(a.lastModifiedAt))
     }
 
     return result
-  }, [articles, searchQuery, activeFilter])
+  }, [articles, searchQuery, activeFilters])
 
   const sortedArticles = useMemo(() => {
     return [...filteredArticles].sort((a, b) => 
@@ -111,9 +125,8 @@ export function WorkQueue() {
     return sites?.find(s => s.id === siteId)?.name ?? ""
   }
 
-  const filterButtons: { id: FilterType; label: string; icon?: typeof FileEdit }[] = [
-    { id: "all", label: "Tous" },
-    { id: "outdated", label: "À actualiser" },
+  const filterButtons: { id: FilterType; label: string; icon: typeof FileEdit }[] = [
+    { id: "outdated", label: "À actualiser", icon: Clock },
     { id: "drafts", label: "Brouillons", icon: FileEdit },
     { id: "signals", label: "Avec signaux", icon: Bell },
   ]
@@ -122,8 +135,10 @@ export function WorkQueue() {
   const signalsCount = articles?.filter(a => a.hasSignals).length ?? 0
   const outdatedCount = articles?.filter(a => isOlderThanOneYear(a.lastModifiedAt)).length ?? 0
 
+  const hasActiveFilters = activeFilters.size > 0
+
   return (
-    <div className="p-8">
+    <div className="p-8 max-w-6xl mx-auto">
       {/* Header */}
       <div className="mb-6">
         <h1 className="text-xl font-semibold text-stone-800 mb-1">File de travail</h1>
@@ -200,27 +215,29 @@ export function WorkQueue() {
         )}
       </div>
 
-      {/* Boutons de filtre type */}
+      {/* Boutons de filtre type (cumulables) */}
       <div className="flex items-center gap-2 mb-6">
+        <span className="text-xs text-stone-400 mr-1">Filtres :</span>
         {filterButtons.map(btn => {
-          const count = btn.id === "drafts" ? draftsCount : btn.id === "signals" ? signalsCount : btn.id === "outdated" ? outdatedCount : null
+          const count = btn.id === "drafts" ? draftsCount : btn.id === "signals" ? signalsCount : outdatedCount
+          const isActive = activeFilters.has(btn.id)
           return (
             <button
               key={btn.id}
-              onClick={() => setActiveFilter(btn.id)}
+              onClick={() => toggleFilter(btn.id)}
               className={cn(
-                "flex items-center gap-2 px-3 py-1.5 rounded-lg text-sm font-medium transition-all",
-                activeFilter === btn.id
-                  ? "bg-orange-100 text-orange-700"
-                  : "text-stone-500 hover:bg-stone-100 hover:text-stone-700"
+                "flex items-center gap-2 px-3 py-1.5 rounded-lg text-sm font-medium transition-all border",
+                isActive
+                  ? "bg-orange-100 text-orange-700 border-orange-200"
+                  : "text-stone-500 hover:bg-stone-100 hover:text-stone-700 border-transparent"
               )}
             >
-              {btn.icon && <btn.icon className="h-3.5 w-3.5" />}
+              <btn.icon className="h-3.5 w-3.5" />
               <span>{btn.label}</span>
-              {count !== null && count > 0 && (
+              {count > 0 && (
                 <span className={cn(
                   "text-xs px-1.5 py-0.5 rounded-full",
-                  activeFilter === btn.id ? "bg-orange-200 text-orange-800" : "bg-stone-200 text-stone-600"
+                  isActive ? "bg-orange-200 text-orange-800" : "bg-stone-200 text-stone-600"
                 )}>
                   {count}
                 </span>
@@ -228,12 +245,27 @@ export function WorkQueue() {
             </button>
           )
         })}
+        {hasActiveFilters && (
+          <button
+            onClick={clearFilters}
+            className="ml-2 text-xs text-stone-400 hover:text-stone-600 flex items-center gap-1"
+          >
+            <X className="h-3 w-3" />
+            Effacer
+          </button>
+        )}
       </div>
 
       {/* Résumé */}
       <p className="text-sm text-stone-500 mb-4">
         {sortedArticles.length} article{sortedArticles.length > 1 ? 's' : ''} 
-        {activeFilter !== "all" && ` (filtre actif)`}
+        {hasActiveFilters && (
+          <span className="text-orange-600">
+            {" "}({Array.from(activeFilters).map(f => 
+              f === "drafts" ? "brouillons" : f === "signals" ? "signaux" : "obsolètes"
+            ).join(" + ")})
+          </span>
+        )}
       </p>
 
       {/* Liste des articles */}
@@ -244,9 +276,9 @@ export function WorkQueue() {
       ) : sortedArticles.length === 0 ? (
         <div className="flex flex-col items-center justify-center h-64 text-stone-400">
           <p>Aucun article trouvé</p>
-          {activeFilter !== "all" && (
+          {hasActiveFilters && (
             <button 
-              onClick={() => setActiveFilter("all")}
+              onClick={clearFilters}
               className="mt-2 text-sm text-orange-600 hover:underline"
             >
               Réinitialiser les filtres

@@ -1,12 +1,14 @@
 import { useState } from "react"
 import { NavLink, useNavigate } from "react-router-dom"
-import { LayoutDashboard, ListTodo, FileText, LogOut } from "lucide-react"
+import { LayoutDashboard, ListTodo, LogOut, Bell, BarChart3 } from "lucide-react"
 import { cn } from "@/lib/utils"
 import { useAuth } from "@/lib/AuthContext"
 
 const navItems = [
   { to: "/", label: "Dashboard", icon: LayoutDashboard },
   { to: "/queue", label: "File de travail", icon: ListTodo },
+  { to: "/signaux", label: "Signaux", icon: Bell },
+  { to: "/reporting", label: "Reporting", icon: BarChart3 },
 ]
 
 export function Sidebar() {
@@ -41,14 +43,12 @@ export function Sidebar() {
           "h-14 flex items-center border-b border-stone-100 transition-all",
           isExpanded ? "px-4 gap-3" : "px-0 justify-center"
         )}>
-          <div className="p-1.5 bg-orange-50 rounded-lg flex-shrink-0">
-            <FileText className="h-5 w-5 text-orange-600" />
-          </div>
+          <img src="/logo.png" alt="Actualisator" className="h-8 w-8 rounded-lg flex-shrink-0" />
           <span className={cn(
             "font-semibold text-stone-800 whitespace-nowrap transition-opacity duration-200",
             isExpanded ? "opacity-100" : "opacity-0 w-0 overflow-hidden"
           )}>
-            Actualiseurs
+            Actualisator
           </span>
         </div>
 

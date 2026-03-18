@@ -5,6 +5,8 @@ import { Login } from "@/pages/Login"
 import { Dashboard } from "@/pages/Dashboard"
 import { WorkQueue } from "@/pages/WorkQueue"
 import { ArticleEditor } from "@/pages/ArticleEditor"
+import { Signals } from "@/pages/Signals"
+import { Reporting } from "@/pages/Reporting"
 
 export const router = createBrowserRouter([
   {
@@ -29,6 +31,14 @@ export const router = createBrowserRouter([
           {
             path: "article/:id",
             element: <ArticleEditor />,
+          },
+          {
+            path: "signaux",
+            element: <Signals />,
+          },
+          {
+            path: "reporting",
+            element: <Reporting />,
           },
         ],
       },

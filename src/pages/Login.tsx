@@ -1,6 +1,5 @@
 import { useState } from "react"
 import { useNavigate } from "react-router-dom"
-import { FileText } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { useAuth } from "@/lib/AuthContext"
 import type { Actualiseur } from "@/types"
@@ -21,14 +20,10 @@ export function Login() {
     <div className="min-h-screen bg-gradient-to-br from-stone-50 to-orange-50 flex items-center justify-center p-4">
       <div className="w-full max-w-sm">
         <div className="bg-white rounded-2xl shadow-xl shadow-stone-200/50 p-8">
-          <div className="flex items-center justify-center gap-3 mb-8">
-            <div className="p-2 bg-orange-100 rounded-xl">
-              <FileText className="h-6 w-6 text-orange-600" />
-            </div>
-            <div>
-              <h1 className="text-xl font-semibold text-stone-800">Actualiseurs</h1>
-              <p className="text-xs text-stone-500">Backoffice</p>
-            </div>
+          <div className="flex flex-col items-center mb-8">
+            <img src="/logo.png" alt="Actualisator" className="h-16 w-16 rounded-xl mb-3" />
+            <h1 className="text-xl font-semibold text-stone-800">Actualisator</h1>
+            <p className="text-xs text-stone-500">Backoffice</p>
           </div>
 
           <div className="space-y-4">

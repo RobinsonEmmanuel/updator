@@ -1,0 +1,82 @@
+[
+  {
+    "id": "draft-001",
+    "articleId": "art-italie-001",
+    "siteId": "site-italie",
+    "clusterId": "cluster-italie-rome",
+    "content": "<h2>Visiter Rome en 3 jours : itinéraire complet</h2><p>Rome, la ville éternelle, regorge de trésors historiques et culturels. Voici notre itinéraire optimisé pour découvrir les incontournables en 3 jours.</p><h3>Jour 1 : Le cœur antique</h3><p>Commencez par le Colisée, symbole de la puissance romaine...</p>",
+    "checksSnapshot": {
+      "check-liens-generaux": true,
+      "check-booking": null,
+      "check-gyg": true,
+      "check-prix-horaires": null
+    },
+    "createdAt": "2026-03-17T09:00:00Z",
+    "updatedAt": "2026-03-18T08:30:00Z",
+    "author": "Julie",
+    "status": "editing"
+  },
+  {
+    "id": "draft-002",
+    "articleId": "art-portugal-001",
+    "siteId": "site-portugal",
+    "clusterId": "cluster-portugal-porto",
+    "content": "<h2>Visiter Porto en 3 jours</h2><p>Porto est une ville fascinante entre fleuve Douro et océan Atlantique. Découvrez notre guide complet.</p><h3>Les incontournables</h3><p>La Ribeira, classée UNESCO, les caves à vin de Porto, la librairie Lello...</p>",
+    "checksSnapshot": {
+      "check-liens-generaux": null,
+      "check-booking": null
+    },
+    "createdAt": "2026-03-16T14:00:00Z",
+    "updatedAt": "2026-03-17T16:45:00Z",
+    "author": "Emmanuel",
+    "status": "editing"
+  },
+  {
+    "id": "draft-003",
+    "articleId": "art-maroc-001",
+    "siteId": "site-maroc",
+    "clusterId": "cluster-maroc-agadir",
+    "content": "<h2>Visiter Agadir en 3 jours</h2><p>Agadir, station balnéaire du sud marocain, offre plages, soleil et excursions vers l'arrière-pays.</p><h3>Jour 1 : La corniche et le souk</h3><p>Balade sur la promenade, puis direction le souk El Had...</p>",
+    "checksSnapshot": {
+      "check-liens-generaux": true,
+      "check-booking": true,
+      "check-prix-horaires": true,
+      "check-gyg": null
+    },
+    "createdAt": "2026-03-15T10:00:00Z",
+    "updatedAt": "2026-03-18T09:15:00Z",
+    "author": "Emmanuel",
+    "status": "ready_to_push"
+  },
+  {
+    "id": "draft-004",
+    "articleId": "art-espagne-001",
+    "siteId": "site-espagne",
+    "clusterId": "cluster-espagne-seville",
+    "content": "<h2>Visiter Séville en 3 jours</h2><p>Séville, capitale de l'Andalousie, vous séduira par son architecture mudéjare et son ambiance festive.</p><h3>L'Alcázar et la Cathédrale</h3><p>Deux monuments UNESCO à ne pas manquer...</p>",
+    "checksSnapshot": {
+      "check-liens-generaux": null
+    },
+    "createdAt": "2026-03-18T07:00:00Z",
+    "updatedAt": "2026-03-18T07:30:00Z",
+    "author": "Claire",
+    "status": "editing"
+  },
+  {
+    "id": "draft-005",
+    "articleId": "art-grece-001",
+    "siteId": "site-grece",
+    "clusterId": "cluster-grece-athenes",
+    "content": "<h2>Visiter Athènes en 3 jours</h2><p>Berceau de la démocratie et de la philosophie, Athènes mêle vestiges antiques et quartiers branchés.</p><h3>L'Acropole</h3><p>Le Parthénon domine la ville depuis 2500 ans...</p>",
+    "checksSnapshot": {
+      "check-liens-generaux": true,
+      "check-gyg": true,
+      "check-prix-horaires": null,
+      "check-existence-lieux": null
+    },
+    "createdAt": "2026-03-14T11:00:00Z",
+    "updatedAt": "2026-03-17T14:20:00Z",
+    "author": "Emmanuel",
+    "status": "editing"
+  }
+]

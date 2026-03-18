@@ -18,12 +18,12 @@ const variantStyles = {
 
 export function StatCard({ label, value, icon, variant = "default", subtitle }: StatCardProps) {
   return (
-    <div className="bg-white rounded-lg border border-stone-200 p-4 flex flex-col">
-      <div className="flex items-center justify-between mb-1">
+    <div className="bg-white/60 backdrop-blur-sm rounded-xl p-5 shadow-sm shadow-stone-100">
+      <div className="flex items-center justify-between mb-2">
         <p className="text-sm text-stone-500">{label}</p>
-        {icon && <span className="text-stone-400">{icon}</span>}
+        {icon && <span className="text-stone-300">{icon}</span>}
       </div>
-      <p className={cn("text-3xl font-semibold", variantStyles[variant])}>
+      <p className={cn("text-3xl font-semibold tracking-tight", variantStyles[variant])}>
         {value}
       </p>
       {subtitle && (

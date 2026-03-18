@@ -9,10 +9,10 @@ interface ProgressBarProps {
 }
 
 const variantStyles = {
-  default: "bg-stone-600",
-  success: "bg-teal-600",
-  warning: "bg-orange-500",
-  danger: "bg-red-500",
+  default: "bg-stone-400",
+  success: "bg-teal-500",
+  warning: "bg-orange-400",
+  danger: "bg-red-400",
 }
 
 export function ProgressBar({
@@ -26,7 +26,7 @@ export function ProgressBar({
 
   return (
     <div className={cn("flex items-center gap-2", className)}>
-      <div className="flex-1 h-2 bg-stone-200 rounded-full overflow-hidden">
+      <div className="flex-1 h-1.5 bg-stone-100 rounded-full overflow-hidden">
         <div
           className={cn("h-full rounded-full transition-all", variantStyles[variant])}
           style={{ width: `${percentage}%` }}

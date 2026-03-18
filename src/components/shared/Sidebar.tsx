@@ -1,6 +1,8 @@
-import { NavLink } from "react-router-dom"
-import { LayoutDashboard, ListTodo, FileText } from "lucide-react"
+import { useState } from "react"
+import { NavLink, useNavigate } from "react-router-dom"
+import { LayoutDashboard, ListTodo, FileText, LogOut } from "lucide-react"
 import { cn } from "@/lib/utils"
+import { useAuth } from "@/lib/AuthContext"
 
 const navItems = [
   { to: "/", label: "Dashboard", icon: LayoutDashboard },
@@ -8,36 +10,111 @@ const navItems = [
 ]
 
 export function Sidebar() {
+  const [isExpanded, setIsExpanded] = useState(false)
+  const { user, logout } = useAuth()
+  const navigate = useNavigate()
+
+  const handleLogout = () => {
+    logout()
+    navigate("/login")
+  }
+
   return (
-    <aside className="w-56 bg-stone-100 border-r border-stone-200 flex flex-col">
-      <div className="p-4 border-b border-stone-200">
-        <div className="flex items-center gap-2">
-          <FileText className="h-6 w-6 text-orange-600" />
-          <span className="font-semibold text-stone-800">Actualiseurs</span>
+    <>
+      {/* Zone de détection hover sur le bord gauche */}
+      <div
+        className="fixed left-0 top-0 w-3 h-full z-40"
+        onMouseEnter={() => setIsExpanded(true)}
+      />
+
+      {/* Sidebar */}
+      <aside
+        className={cn(
+          "fixed left-0 top-0 h-full bg-white/95 backdrop-blur-sm border-r border-stone-200/60 flex flex-col z-30 transition-all duration-300 ease-out shadow-lg shadow-stone-200/20",
+          isExpanded ? "w-52" : "w-14"
+        )}
+        onMouseEnter={() => setIsExpanded(true)}
+        onMouseLeave={() => setIsExpanded(false)}
+      >
+        {/* Logo */}
+        <div className={cn(
+          "h-14 flex items-center border-b border-stone-100 transition-all",
+          isExpanded ? "px-4 gap-3" : "px-0 justify-center"
+        )}>
+          <div className="p-1.5 bg-orange-50 rounded-lg flex-shrink-0">
+            <FileText className="h-5 w-5 text-orange-600" />
+          </div>
+          <span className={cn(
+            "font-semibold text-stone-800 whitespace-nowrap transition-opacity duration-200",
+            isExpanded ? "opacity-100" : "opacity-0 w-0 overflow-hidden"
+          )}>
+            Actualiseurs
+          </span>
         </div>
-      </div>
-      <nav className="flex-1 p-2">
-        <ul className="space-y-1">
-          {navItems.map((item) => (
-            <li key={item.to}>
-              <NavLink
-                to={item.to}
-                className={({ isActive }) =>
-                  cn(
-                    "flex items-center gap-2 px-3 py-2 rounded-lg text-sm font-medium transition-colors",
-                    isActive
-                      ? "bg-orange-100 text-orange-700"
-                      : "text-stone-600 hover:bg-stone-200 hover:text-stone-800"
-                  )
-                }
-              >
-                <item.icon className="h-4 w-4" />
-                {item.label}
-              </NavLink>
-            </li>
-          ))}
-        </ul>
-      </nav>
-    </aside>
+
+        {/* Navigation */}
+        <nav className="flex-1 py-3 px-2">
+          <ul className="space-y-1">
+            {navItems.map((item) => (
+              <li key={item.to}>
+                <NavLink
+                  to={item.to}
+                  className={({ isActive }) =>
+                    cn(
+                      "flex items-center gap-3 px-2.5 py-2 rounded-lg text-sm font-medium transition-all",
+                      isActive
+                        ? "bg-orange-50 text-orange-700"
+                        : "text-stone-500 hover:bg-stone-50 hover:text-stone-700",
+                      !isExpanded && "justify-center"
+                    )
+                  }
+                  title={!isExpanded ? item.label : undefined}
+                >
+                  <item.icon className="h-4 w-4 flex-shrink-0" />
+                  <span className={cn(
+                    "whitespace-nowrap transition-opacity duration-200",
+                    isExpanded ? "opacity-100" : "opacity-0 w-0 overflow-hidden"
+                  )}>
+                    {item.label}
+                  </span>
+                </NavLink>
+              </li>
+            ))}
+          </ul>
+        </nav>
+
+        {/* User + Logout */}
+        <div className={cn(
+          "border-t border-stone-100 py-3 px-2",
+          isExpanded ? "space-y-2" : ""
+        )}>
+          {isExpanded && user && (
+            <div className="px-2.5 py-1.5">
+              <p className="text-xs text-stone-400">Connecté</p>
+              <p className="text-sm font-medium text-stone-700">{user.name}</p>
+            </div>
+          )}
+          <button
+            onClick={handleLogout}
+            className={cn(
+              "flex items-center gap-3 px-2.5 py-2 rounded-lg text-sm font-medium text-stone-500 hover:bg-red-50 hover:text-red-600 transition-all w-full",
+              !isExpanded && "justify-center"
+            )}
+            title={!isExpanded ? "Déconnexion" : undefined}
+          >
+            <LogOut className="h-4 w-4 flex-shrink-0" />
+            <span className={cn(
+              "whitespace-nowrap transition-opacity duration-200",
+              isExpanded ? "opacity-100" : "opacity-0 w-0 overflow-hidden"
+            )}>
+              Déconnexion
+            </span>
+          </button>
+        </div>
+      </aside>
+
+      {/* Spacer pour le contenu */}
+      <div className="w-14 flex-shrink-0" />
+    </>
   )
 }

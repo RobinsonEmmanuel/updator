@@ -10,13 +10,12 @@ export function Dashboard() {
 
   if (isLoading) {
     return (
-      <div className="p-6">
-        <h1 className="text-2xl font-semibold text-stone-800 mb-6">Dashboard</h1>
-        <div className="grid grid-cols-4 gap-4">
+      <div className="p-8">
+        <div className="grid grid-cols-4 gap-5">
           {[...Array(4)].map((_, i) => (
-            <div key={i} className="bg-white rounded-lg border border-stone-200 p-4 animate-pulse">
-              <div className="h-4 bg-stone-200 rounded w-24 mb-2" />
-              <div className="h-8 bg-stone-200 rounded w-16" />
+            <div key={i} className="bg-white/60 rounded-xl p-5 animate-pulse">
+              <div className="h-4 bg-stone-100 rounded w-24 mb-3" />
+              <div className="h-8 bg-stone-100 rounded w-16" />
             </div>
           ))}
         </div>
@@ -26,23 +25,21 @@ export function Dashboard() {
 
   if (!stats) return null
 
-  return (
-    <div className="p-6">
-      <div className="flex items-center justify-between mb-6">
-        <h1 className="text-2xl font-semibold text-stone-800">Dashboard</h1>
-        <p className="text-sm text-stone-500">
-          {selectedSiteId ? "Site sélectionné" : "Vue globale — tous les sites"}
-        </p>
-      </div>
+  const filteredSites = selectedSiteId 
+    ? sites?.filter(s => s.id === selectedSiteId)
+    : sites
 
-      <div className="grid grid-cols-4 gap-4 mb-8">
+  return (
+    <div className="p-8 space-y-8">
+      {/* KPIs */}
+      <div className="grid grid-cols-4 gap-5">
         <StatCard
-          label="Articles à traiter"
+          label="À traiter"
           value={stats.articlesToUpdate}
           icon={<FileText className="h-4 w-4" />}
         />
         <StatCard
-          label="Mis à jour aujourd'hui"
+          label="Faits aujourd'hui"
           value={stats.articlesDoneToday}
           icon={<CheckCircle className="h-4 w-4" />}
           variant="success"
@@ -52,39 +49,51 @@ export function Dashboard() {
           value={`${stats.sitesAtQuota}/${stats.sitesTotal}`}
           icon={<AlertTriangle className="h-4 w-4" />}
           variant={stats.sitesAtQuota > 0 ? "warning" : "default"}
-          subtitle={stats.sitesAtQuota > 0 ? "Bloqués pour aujourd'hui" : "Aucun bloqué"}
         />
         <StatCard
-          label="Ancienneté moyenne"
+          label="Ancienneté moy."
           value={`${stats.averageAgeDays}j`}
           icon={<Clock className="h-4 w-4" />}
-          subtitle="Articles à traiter"
         />
       </div>
 
+      {/* Main content */}
       <div className="grid grid-cols-3 gap-6">
-        <div className="col-span-2">
-          <h2 className="font-medium text-stone-800 mb-4">Sites & Clusters</h2>
+        {/* Sites & Clusters */}
+        <div className="col-span-2 space-y-4">
+          <h2 className="text-sm font-medium text-stone-500 uppercase tracking-wide">
+            Sites
+          </h2>
           <div className="grid grid-cols-2 gap-4">
-            {(selectedSiteId 
-              ? sites?.filter(s => s.id === selectedSiteId)
-              : sites
-            )?.map((site) => (
+            {filteredSites?.map((site) => (
               <SiteCard key={site.id} site={site} />
             ))}
           </div>
         </div>
+
+        {/* Right column */}
         <div className="space-y-6">
-          <div className="bg-white rounded-lg border border-stone-200 p-4">
-            <h2 className="font-medium text-stone-800 mb-4">Articles urgents</h2>
-            <UrgentArticlesList siteId={selectedSiteId} limit={8} />
-          </div>
-          <div className="bg-white rounded-lg border border-stone-200 p-4">
-            <h2 className="font-medium text-stone-800 mb-4">
-              Signaux ouverts ({stats.openSignalsCount})
+          {/* Articles récents */}
+          <div>
+            <h2 className="text-sm font-medium text-stone-500 uppercase tracking-wide mb-4">
+              À traiter en priorité
             </h2>
-            <SignalPanel siteId={selectedSiteId} />
+            <div className="bg-white/60 backdrop-blur-sm rounded-xl p-4 shadow-sm shadow-stone-100">
+              <UrgentArticlesList siteId={selectedSiteId} limit={6} />
+            </div>
           </div>
+
+          {/* Signaux */}
+          {stats.openSignalsCount > 0 && (
+            <div>
+              <h2 className="text-sm font-medium text-stone-500 uppercase tracking-wide mb-4">
+                Signaux ({stats.openSignalsCount})
+              </h2>
+              <div className="bg-white/60 backdrop-blur-sm rounded-xl p-4 shadow-sm shadow-stone-100">
+                <SignalPanel siteId={selectedSiteId} />
+              </div>
+            </div>
+          )}
         </div>
       </div>
     </div>

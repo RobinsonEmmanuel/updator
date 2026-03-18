@@ -1,6 +1,7 @@
 export { Layout } from "./Layout"
 export { Sidebar } from "./Sidebar"
 export { Header } from "./Header"
+export { ProtectedRoute } from "./ProtectedRoute"
 export { StatCard } from "./StatCard"
 export { ProgressBar } from "./ProgressBar"
 export { ClusterRow } from "./ClusterRow"

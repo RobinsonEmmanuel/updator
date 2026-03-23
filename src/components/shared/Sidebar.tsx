@@ -1,6 +1,6 @@
 import { useState } from "react"
 import { NavLink, useNavigate } from "react-router-dom"
-import { LayoutDashboard, ListTodo, LogOut, Bell, BarChart3, Settings } from "lucide-react"
+import { LayoutDashboard, ListTodo, LogOut, Bell, BarChart3, Settings, Brain } from "lucide-react"
 import { cn } from "@/lib/utils"
 import { useAuth } from "@/lib/AuthContext"
 
@@ -9,6 +9,7 @@ const navItems = [
   { to: "/queue", label: "File de travail", icon: ListTodo },
   { to: "/signaux", label: "Signaux", icon: Bell },
   { to: "/reporting", label: "Reporting", icon: BarChart3 },
+  { to: "/clusters", label: "Clusters", icon: Brain },
   { to: "/settings", label: "Paramètres", icon: Settings },
 ]
 

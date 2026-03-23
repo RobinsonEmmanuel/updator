@@ -5,4 +5,9 @@ export { useWpPosts, useWpPostsInfinite, useWpPost, useWpCategories } from "./us
 export { useWpSiteData } from "./useWpSiteData"
 export type { WpSiteData } from "./useWpSiteData"
 export { useAllSitesData } from "./useAllSitesData"
-export type { AllSitesData, WpPostWithSite } from "./useAllSitesData"
+export type { AllSitesData, WpPostWithSite, SiteWithData } from "./useAllSitesData"
+export {
+  useClusterMappings,
+  useRecomputeClusterMappings,
+  useOverrideClusterMapping,
+} from "./useClusterMappings"

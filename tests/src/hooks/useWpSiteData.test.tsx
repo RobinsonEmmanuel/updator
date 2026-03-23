@@ -25,12 +25,32 @@ const mockSite: ConnectedSite = {
 }
 
 const mockPosts = [
-  { id: 1, title: { rendered: "Post 1" }, modified: "2025-01-01T00:00:00Z", status: "publish", categories: [1] },
-  { id: 2, title: { rendered: "Post 2" }, modified: "2026-03-01T00:00:00Z", status: "publish", categories: [1] },
+  {
+    id: 1,
+    date: "2025-01-01T00:00:00",
+    slug: "post-1",
+    type: "post",
+    link: "https://test.com/p1",
+    title: { rendered: "Post 1" },
+    modified: "2025-01-01T00:00:00Z",
+    status: "publish" as const,
+    categories: [1],
+  },
+  {
+    id: 2,
+    date: "2026-03-01T00:00:00",
+    slug: "post-2",
+    type: "post",
+    link: "https://test.com/p2",
+    title: { rendered: "Post 2" },
+    modified: "2026-03-01T00:00:00Z",
+    status: "publish" as const,
+    categories: [1],
+  },
 ]
 
 const mockCategories = [
-  { id: 1, name: "Category 1", count: 2 },
+  { id: 1, name: "Category 1", slug: "cat-1", count: 2, parent: 0 },
 ]
 
 describe("useWpSiteData", () => {
@@ -125,9 +145,8 @@ describe("useWpSiteData", () => {
   })
 
   it("handles fetch errors gracefully", async () => {
-    vi.spyOn(global, "fetch").mockResolvedValueOnce({
-      ok: false,
-    } as Response)
+    const failed = { ok: false, json: async () => ({ error: "fail" }) } as Response
+    vi.spyOn(global, "fetch").mockResolvedValueOnce(failed).mockResolvedValueOnce(failed)
 
     const { result } = renderHook(() => useWpSiteData(mockSite), {
       wrapper: createWrapper(),

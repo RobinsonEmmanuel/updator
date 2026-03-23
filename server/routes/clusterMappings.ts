@@ -1,0 +1,277 @@
+import { Router, Request, Response } from "express"
+import { Types } from "mongoose"
+import { SiteWeb } from "../models/SiteWeb"
+import { Actualisateur } from "../models/Actualisateur"
+import { decryptAppPassword } from "../lib/credentialsCrypto"
+import { ArticleClusterMapping } from "../models/ArticleClusterMapping"
+import { fetchClustersForRegions } from "../lib/rlClusters"
+import { scorePostClusters } from "../lib/clusterScoring"
+
+const router = Router()
+
+type WpPostLite = {
+  id: number
+  slug: string
+  modified: string
+  status: string
+  link: string
+  title: { rendered?: string }
+  categories: number[]
+}
+
+type WpCategoryLite = {
+  id: number
+  name: string
+}
+
+function parseWpPostId(raw: string): number | null {
+  const n = Number.parseInt(raw, 10)
+  return Number.isNaN(n) ? null : n
+}
+
+async function getUserCredentials(req: Request, siteId: string) {
+  const user = await Actualisateur.findById(req.rlUserId)
+  if (!user) return null
+  const connection = user.siteConnections.find((conn) => conn.siteId.toString() === siteId)
+  if (!connection) return null
+  return {
+    username: connection.username,
+    appPassword: decryptAppPassword(connection.appPassword),
+  }
+}
+
+function wpAuthHeader(username: string, appPassword: string): string {
+  return "Basic " + Buffer.from(`${username}:${appPassword}`).toString("base64")
+}
+
+async function fetchPaged<T>(baseUrl: string, path: string, auth: string, fields: string): Promise<T[]> {
+  const first = new URL(`${baseUrl}${path}`)
+  first.searchParams.set("per_page", "100")
+  first.searchParams.set("page", "1")
+  first.searchParams.set("_fields", fields)
+
+  const firstRes = await fetch(first.toString(), { headers: { Authorization: auth } })
+  if (!firstRes.ok) throw new Error(`WordPress API error: ${firstRes.status}`)
+  const firstData = (await firstRes.json()) as T[]
+  const totalPages = parseInt(firstRes.headers.get("X-WP-TotalPages") || "1", 10)
+  if (totalPages <= 1) return firstData
+
+  const remaining = await Promise.all(
+    Array.from({ length: totalPages - 1 }, (_, i) => i + 2).map(async (page) => {
+      const url = new URL(`${baseUrl}${path}`)
+      url.searchParams.set("per_page", "100")
+      url.searchParams.set("page", String(page))
+      url.searchParams.set("_fields", fields)
+      const res = await fetch(url.toString(), { headers: { Authorization: auth } })
+      if (!res.ok) throw new Error(`WordPress API error: ${res.status}`)
+      return (await res.json()) as T[]
+    })
+  )
+  return [...firstData, ...remaining.flat()]
+}
+
+async function fetchWpSiteData(site: { url: string }, credentials: { username: string; appPassword: string }) {
+  const baseUrl = site.url.replace(/\/$/, "")
+  const auth = wpAuthHeader(credentials.username, credentials.appPassword)
+  const [posts, categories] = await Promise.all([
+    fetchPaged<WpPostLite>(
+      baseUrl,
+      "/wp-json/wp/v2/posts",
+      auth,
+      "id,slug,modified,status,link,title,categories"
+    ),
+    fetchPaged<WpCategoryLite>(baseUrl, "/wp-json/wp/v2/categories", auth, "id,name"),
+  ])
+  return { posts, categories }
+}
+
+// GET /api/cluster-mappings/:siteId?status=needs_review|auto|approved|overridden
+router.get("/:siteId", async (req: Request, res: Response) => {
+  try {
+    const { siteId } = req.params
+    const status = typeof req.query.status === "string" ? req.query.status : undefined
+
+    const site = await SiteWeb.findById(siteId)
+    if (!site) return res.status(404).json({ error: "Site not found" })
+
+    const query: Record<string, unknown> = { siteId: new Types.ObjectId(siteId) }
+    if (status) query.status = status
+    const mappings = await ArticleClusterMapping.find(query).sort({ updatedAt: -1 }).lean()
+
+    const credentials = await getUserCredentials(req, siteId)
+    if (!credentials) {
+      return res.status(403).json({ error: "Not connected to this site. Please add your credentials first." })
+    }
+
+    const { posts, categories } = await fetchWpSiteData(site, credentials)
+    const postById = new Map<number, WpPostLite>(posts.map((p) => [p.id, p]))
+    const catById = new Map<number, string>(categories.map((c) => [c.id, c.name]))
+
+    const data = mappings.map((m) => {
+      const post = postById.get(m.wpPostId)
+      const categoryNames = post ? post.categories.map((id) => catById.get(id)).filter(Boolean) : []
+      return {
+        ...m,
+        post: post
+          ? {
+              id: post.id,
+              slug: post.slug,
+              modified: post.modified,
+              status: post.status,
+              link: post.link,
+              title: post.title?.rendered || "",
+              categoryNames,
+            }
+          : null,
+      }
+    })
+
+    res.json({ data, total: data.length, site: { _id: site._id, name: site.name, regionIds: site.regionIds || [] } })
+  } catch (error) {
+    console.error("Error listing cluster mappings:", error)
+    res.status(500).json({ error: "Failed to list cluster mappings" })
+  }
+})
+
+// POST /api/cluster-mappings/:siteId/recompute
+router.post("/:siteId/recompute", async (req: Request, res: Response) => {
+  try {
+    const { siteId } = req.params
+    const force = req.query.force === "1" || req.query.force === "true"
+
+    const site = await SiteWeb.findById(siteId)
+    if (!site) return res.status(404).json({ error: "Site not found" })
+    if (!Array.isArray(site.regionIds) || site.regionIds.length === 0) {
+      return res.status(400).json({ error: "Site has no regionIds configured" })
+    }
+
+    const credentials = await getUserCredentials(req, siteId)
+    if (!credentials) {
+      return res.status(403).json({ error: "Not connected to this site. Please add your credentials first." })
+    }
+
+    const [clusters, wpData, existing] = await Promise.all([
+      fetchClustersForRegions(req, site.regionIds),
+      fetchWpSiteData(site, credentials),
+      ArticleClusterMapping.find({ siteId: new Types.ObjectId(siteId) }),
+    ])
+
+    const existingByPost = new Map<number, (typeof existing)[number]>()
+    for (const row of existing) existingByPost.set(row.wpPostId, row)
+
+    const validClusterIds = new Set(clusters.map((c) => c.id))
+    const currentWpPostIds = new Set<number>()
+    const ops: Promise<unknown>[] = []
+    let updated = 0
+    let skippedOverridden = 0
+    let needsReview = 0
+
+    for (const post of wpData.posts) {
+      currentWpPostIds.add(post.id)
+      const prev = existingByPost.get(post.id)
+
+      if (prev?.status === "overridden" && !force) {
+        skippedOverridden++
+        continue
+      }
+
+      const score = scorePostClusters(post, wpData.categories, clusters)
+      const staleClusterSignal = (prev?.clusterIds || []).some((id) => !validClusterIds.has(id))
+        ? ["stale_cluster_id"]
+        : []
+      const finalStatus = score.clusterIds.length === 0 ? "needs_review" : score.status
+
+      if (finalStatus === "needs_review") needsReview++
+
+      ops.push(
+        ArticleClusterMapping.updateOne(
+          { siteId: new Types.ObjectId(siteId), wpPostId: post.id },
+          {
+            $set: {
+              siteId: new Types.ObjectId(siteId),
+              wpPostId: post.id,
+              clusterIds: score.clusterIds,
+              confidence: score.confidence,
+              status: finalStatus,
+              sourceSignals: [...new Set([...score.sourceSignals, ...staleClusterSignal])],
+              updatedAt: new Date(),
+            },
+            $setOnInsert: { createdAt: new Date() },
+          },
+          { upsert: true }
+        )
+      )
+      updated++
+    }
+
+    // Drop mappings for deleted/unavailable WP posts
+    ops.push(
+      ArticleClusterMapping.deleteMany({
+        siteId: new Types.ObjectId(siteId),
+        wpPostId: { $nin: Array.from(currentWpPostIds) },
+      })
+    )
+
+    await Promise.all(ops)
+
+    res.json({
+      success: true,
+      summary: {
+        clustersLoaded: clusters.length,
+        wpPosts: wpData.posts.length,
+        updated,
+        needsReview,
+        skippedOverridden,
+        force,
+      },
+    })
+  } catch (error) {
+    console.error("Error recomputing cluster mappings:", error)
+    res.status(500).json({ error: "Failed to recompute cluster mappings" })
+  }
+})
+
+// PATCH /api/cluster-mappings/:siteId/:wpPostId (manual override)
+router.patch("/:siteId/:wpPostId", async (req: Request, res: Response) => {
+  try {
+    const { siteId, wpPostId: rawWpPostId } = req.params
+    const wpPostId = parseWpPostId(rawWpPostId)
+    if (wpPostId == null) return res.status(400).json({ error: "Invalid wpPostId" })
+
+    const { clusterIds, status } = req.body as {
+      clusterIds?: unknown
+      status?: "approved" | "overridden" | "needs_review"
+    }
+
+    if (!Array.isArray(clusterIds) || !clusterIds.every((id) => typeof id === "string")) {
+      return res.status(400).json({ error: "clusterIds must be a string array" })
+    }
+
+    const finalStatus = status || "overridden"
+
+    await ArticleClusterMapping.updateOne(
+      { siteId: new Types.ObjectId(siteId), wpPostId },
+      {
+        $set: {
+          siteId: new Types.ObjectId(siteId),
+          wpPostId,
+          clusterIds,
+          status: finalStatus,
+          confidence: finalStatus === "overridden" ? 1 : 0.85,
+          sourceSignals: ["manual_override"],
+          updatedAt: new Date(),
+        },
+        $setOnInsert: { createdAt: new Date() },
+      },
+      { upsert: true }
+    )
+
+    const row = await ArticleClusterMapping.findOne({ siteId: new Types.ObjectId(siteId), wpPostId }).lean()
+    res.json({ success: true, data: row })
+  } catch (error) {
+    console.error("Error overriding cluster mapping:", error)
+    res.status(500).json({ error: "Failed to update cluster mapping" })
+  }
+})
+
+export default router

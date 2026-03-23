@@ -8,6 +8,7 @@ import { ArticleEditor } from "@/pages/ArticleEditor"
 import { Signals } from "@/pages/Signals"
 import { Reporting } from "@/pages/Reporting"
 import { Settings } from "@/pages/Settings"
+import { ClusterMappings } from "@/pages/ClusterMappings"
 
 export const router = createBrowserRouter([
   {
@@ -44,6 +45,10 @@ export const router = createBrowserRouter([
           {
             path: "settings",
             element: <Settings />,
+          },
+          {
+            path: "clusters",
+            element: <ClusterMappings />,
           },
         ],
       },

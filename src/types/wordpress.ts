@@ -25,6 +25,19 @@ export interface WpPost {
   tags: number[]
 }
 
+/** Réponse du proxy liste (`_fields` WP REST — sans content/excerpt) */
+export interface WpPostListItem {
+  id: number
+  date: string
+  modified: string
+  slug: string
+  status: WpPost["status"]
+  type: string
+  link: string
+  title: { rendered: string }
+  categories: number[]
+}
+
 export interface WpCategory {
   id: number
   count: number
@@ -33,6 +46,15 @@ export interface WpCategory {
   name: string
   slug: string
   taxonomy: string
+  parent: number
+}
+
+/** Réponse du proxy catégories (`_fields` WP REST) */
+export interface WpCategoryListItem {
+  id: number
+  count: number
+  name: string
+  slug: string
   parent: number
 }
 

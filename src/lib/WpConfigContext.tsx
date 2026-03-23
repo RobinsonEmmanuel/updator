@@ -7,6 +7,8 @@ export interface SiteWeb {
   _id: string
   name: string
   url: string
+  regionIds?: string[]
+  regionsUpdatedAt?: string | null
 }
 
 export interface ConnectedSite extends SiteWeb {

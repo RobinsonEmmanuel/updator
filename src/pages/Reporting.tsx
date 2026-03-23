@@ -1,10 +1,12 @@
 import { Link } from "react-router-dom"
 import { BarChart3, Calendar, TrendingUp, Settings } from "lucide-react"
+import { BundleProgressBanner } from "@/components/shared"
 import { useWpSiteData, useAllSitesData } from "@/hooks"
 import { useSiteContext } from "@/lib/SiteContext"
-import type { WpPost, WpCategory } from "@/types/wordpress"
+import { flattenCategoryStatsPerSite } from "@/lib/wpCategoryStats"
+import type { WpPostListItem } from "@/types/wordpress"
 
-function getUpToDatePercentage(posts: WpPost[]): number {
+function getUpToDatePercentage(posts: WpPostListItem[]): number {
   if (posts.length === 0) return 100
   const oneYearAgo = new Date()
   oneYearAgo.setFullYear(oneYearAgo.getFullYear() - 1)
@@ -12,13 +14,13 @@ function getUpToDatePercentage(posts: WpPost[]): number {
   return Math.round((upToDate / posts.length) * 100)
 }
 
-function getUpdatesThisMonth(posts: WpPost[]): number {
+function getUpdatesThisMonth(posts: WpPostListItem[]): number {
   const now = new Date()
   const startOfMonth = new Date(now.getFullYear(), now.getMonth(), 1)
   return posts.filter(p => new Date(p.modified) >= startOfMonth).length
 }
 
-function getUpdatesThisWeek(posts: WpPost[]): number {
+function getUpdatesThisWeek(posts: WpPostListItem[]): number {
   const now = new Date()
   const startOfWeek = new Date(now)
   startOfWeek.setDate(now.getDate() - now.getDay())
@@ -80,44 +82,15 @@ function NoSitesMessage() {
   )
 }
 
-interface CategoryWithStats extends WpCategory {
-  posts: WpPost[]
-  outdatedCount: number
-  upToDatePercent: number
-}
-
-function computeCategoryStats(posts: WpPost[], categories: WpCategory[]): CategoryWithStats[] {
-  const ONE_YEAR_MS = 365 * 24 * 60 * 60 * 1000
-  const isOutdated = (p: WpPost) => Date.now() - new Date(p.modified).getTime() > ONE_YEAR_MS
-
-  return categories
-    .filter(cat => cat.count > 0)
-    .map(cat => {
-      const catPosts = posts.filter(p => p.categories.includes(cat.id))
-      const outdatedCount = catPosts.filter(isOutdated).length
-      const upToDateCount = catPosts.length - outdatedCount
-      return {
-        ...cat,
-        posts: catPosts,
-        outdatedCount,
-        upToDatePercent: catPosts.length > 0 
-          ? Math.round((upToDateCount / catPosts.length) * 100)
-          : 100,
-      }
-    })
-    .sort((a, b) => a.upToDatePercent - b.upToDatePercent)
-}
-
 export function Reporting() {
   const { selectedSite, hasNoSites, isLoading: sitesLoading, isAllSitesSelected } = useSiteContext()
   const singleSiteData = useWpSiteData(selectedSite)
-  const allSitesData = useAllSitesData()
+  const allSitesData = useAllSitesData({ enabled: isAllSitesSelected })
 
-  const posts: WpPost[] = isAllSitesSelected ? allSitesData.allPosts : singleSiteData.posts
-  const categories: WpCategory[] = isAllSitesSelected ? allSitesData.allCategories : singleSiteData.categories
+  const posts: WpPostListItem[] = isAllSitesSelected ? allSitesData.allPosts : singleSiteData.posts
   const dataLoading = isAllSitesSelected ? allSitesData.isLoading : singleSiteData.isLoading
-  const categoriesWithStats = isAllSitesSelected 
-    ? computeCategoryStats(posts, categories) 
+  const categoriesWithStats = isAllSitesSelected
+    ? flattenCategoryStatsPerSite(allSitesData.siteData)
     : singleSiteData.categoriesWithStats
 
   const isLoading = sitesLoading || dataLoading
@@ -164,6 +137,15 @@ export function Reporting() {
         </div>
       ) : (
         <>
+          {isAllSitesSelected && allSitesData.hasPendingBundles && (
+            <div className="mb-6">
+              <BundleProgressBanner
+                ready={allSitesData.bundlesReadyCount}
+                total={allSitesData.bundlesTotalCount}
+              />
+            </div>
+          )}
+
           {/* KPIs globaux */}
           <section className="mb-10">
             <h2 className="text-sm font-medium text-stone-500 mb-4">Vue globale</h2>
@@ -205,7 +187,11 @@ export function Reporting() {
                 <div className="space-y-2">
                   {categoryStats.map((cat) => (
                     <div 
-                      key={cat.id}
+                      key={
+                        "siteId" in cat && cat.siteId
+                          ? `${cat.siteId}-${cat.id}`
+                          : String(cat.id)
+                      }
                       className="flex items-center gap-4 px-3 py-2 rounded-lg hover:bg-stone-50"
                     >
                       <div className={`w-2 h-2 rounded-full ${

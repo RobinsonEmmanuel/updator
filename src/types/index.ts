@@ -122,3 +122,26 @@ export interface Draft {
   author: Actualiseur | string
   status: DraftStatus
 }
+
+export type ClusterMappingStatus = "auto" | "needs_review" | "approved" | "overridden"
+
+export interface ArticleClusterMappingItem {
+  _id: string
+  siteId: string
+  wpPostId: number
+  clusterIds: string[]
+  confidence: number
+  status: ClusterMappingStatus
+  sourceSignals: string[]
+  updatedAt: string
+  createdAt: string
+  post: {
+    id: number
+    slug: string
+    modified: string
+    status: string
+    link: string
+    title: string
+    categoryNames: string[]
+  } | null
+}

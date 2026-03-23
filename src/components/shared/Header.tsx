@@ -25,7 +25,7 @@ export function Header() {
 
   if (sites.length === 0 && !isLoading) {
     return (
-      <header className="h-14 bg-white/80 backdrop-blur-sm border-b border-stone-100 flex items-center px-6">
+      <header className="relative z-50 h-14 shrink-0 bg-white/80 backdrop-blur-sm border-b border-stone-100 flex items-center px-6">
         <Link 
           to="/settings"
           className="text-sm text-orange-600 hover:text-orange-700"
@@ -37,7 +37,7 @@ export function Header() {
   }
 
   return (
-    <header className="h-14 bg-white/80 backdrop-blur-sm border-b border-stone-100 flex items-center justify-between px-6">
+    <header className="relative z-50 h-14 shrink-0 bg-white/80 backdrop-blur-sm border-b border-stone-100 flex items-center justify-between px-6">
       {/* Site Selector Dropdown */}
       <div className="relative" ref={dropdownRef}>
         <button
@@ -60,7 +60,7 @@ export function Header() {
 
         {isOpen && (
           <div 
-            className="absolute top-full left-0 mt-1 w-56 bg-white rounded-xl shadow-lg shadow-stone-200/50 border border-stone-100 py-1 z-50"
+            className="absolute top-full left-0 mt-1 w-56 bg-white rounded-xl shadow-lg shadow-stone-200/50 border border-stone-100 py-1 z-[100]"
             onMouseLeave={() => setIsOpen(false)}
           >
             {sites.length > 1 && (

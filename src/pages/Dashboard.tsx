@@ -1,9 +1,19 @@
 import { Link, useNavigate } from "react-router-dom"
 import { FileText, CheckCircle, Clock, ExternalLink, Settings, Loader2 } from "lucide-react"
-import { StatCard, SignalPanel } from "@/components/shared"
-import { useWpSiteData, useOpenSignals, useAllSitesData, type WpPostWithSite } from "@/hooks"
+import { StatCard, SignalPanel, BundleProgressBanner } from "@/components/shared"
+import {
+  useWpSiteData,
+  useOpenSignals,
+  useAllSitesData,
+  type WpPostWithSite,
+  type SiteWithData,
+} from "@/hooks"
 import { useSiteContext } from "@/lib/SiteContext"
-import type { WpPost, WpCategory } from "@/types/wordpress"
+import {
+  flattenCategoryStatsPerSite,
+  type CategoryWithStats,
+} from "@/lib/wpCategoryStats"
+import type { WpPostListItem, WpCategoryListItem } from "@/types/wordpress"
 
 function formatAge(dateString: string): string {
   const date = new Date(dateString)
@@ -26,14 +36,18 @@ function getPercentageColor(percentage: number): string {
 }
 
 interface CategoryRowProps {
-  category: WpCategory & { posts: WpPost[]; upToDatePercent: number }
+  category: CategoryWithStats & { siteId?: string }
 }
 
 function CategoryRow({ category }: CategoryRowProps) {
   const navigate = useNavigate()
 
   const handleClick = () => {
-    navigate(`/queue?categoryId=${category.id}`)
+    if (category.siteId) {
+      navigate(`/queue?categoryId=${category.id}&siteId=${category.siteId}`)
+    } else {
+      navigate(`/queue?categoryId=${category.id}`)
+    }
   }
 
   return (
@@ -58,14 +72,21 @@ function CategoryRow({ category }: CategoryRowProps) {
 }
 
 interface PriorityArticleProps {
-  post: WpPost | WpPostWithSite
-  categories: WpCategory[]
+  post: WpPostListItem | WpPostWithSite
+  categories: WpCategoryListItem[]
   showSite?: boolean
+  /** Résout la bonne catégorie quand les IDs WP se répètent entre sites */
+  siteData?: SiteWithData[]
 }
 
-function PriorityArticle({ post, categories, showSite = false }: PriorityArticleProps) {
-  const category = categories.find(c => post.categories.includes(c.id))
+function PriorityArticle({ post, categories, showSite = false, siteData }: PriorityArticleProps) {
   const postWithSite = post as WpPostWithSite
+  const category =
+    showSite && siteData && postWithSite._siteId
+      ? siteData
+          .find((s) => s.siteId === postWithSite._siteId)
+          ?.categories.find((c) => post.categories.includes(c.id))
+      : categories.find((c) => post.categories.includes(c.id))
   const siteName = postWithSite._siteName
   const siteId = postWithSite._siteId
   
@@ -122,38 +143,10 @@ function NoSitesMessage() {
   )
 }
 
-interface CategoryWithStats extends WpCategory {
-  posts: WpPost[]
-  outdatedCount: number
-  upToDatePercent: number
-}
-
-function computeCategoryStats(posts: WpPost[], categories: WpCategory[]): CategoryWithStats[] {
-  const ONE_YEAR_MS = 365 * 24 * 60 * 60 * 1000
-  const isOutdated = (p: WpPost) => Date.now() - new Date(p.modified).getTime() > ONE_YEAR_MS
-
-  return categories
-    .filter(cat => cat.count > 0)
-    .map(cat => {
-      const catPosts = posts.filter(p => p.categories.includes(cat.id))
-      const outdatedCount = catPosts.filter(isOutdated).length
-      const upToDateCount = catPosts.length - outdatedCount
-      return {
-        ...cat,
-        posts: catPosts,
-        outdatedCount,
-        upToDatePercent: catPosts.length > 0 
-          ? Math.round((upToDateCount / catPosts.length) * 100)
-          : 100,
-      }
-    })
-    .sort((a, b) => a.upToDatePercent - b.upToDatePercent)
-}
-
 export function Dashboard() {
   const { selectedSite, sites, isLoading: sitesLoading, hasNoSites, isAllSitesSelected } = useSiteContext()
   const singleSiteData = useWpSiteData(selectedSite)
-  const allSitesData = useAllSitesData()
+  const allSitesData = useAllSitesData({ enabled: isAllSitesSelected })
   const { data: signals } = useOpenSignals(isAllSitesSelected ? undefined : selectedSite?._id)
 
   const posts = isAllSitesSelected ? allSitesData.allPosts : singleSiteData.posts
@@ -161,8 +154,8 @@ export function Dashboard() {
   const dataLoading = isAllSitesSelected ? allSitesData.isLoading : singleSiteData.isLoading
   const stats = isAllSitesSelected ? allSitesData.stats : singleSiteData.stats
   const priorityPosts = isAllSitesSelected ? allSitesData.priorityPosts : singleSiteData.priorityPosts
-  const categoriesWithStats = isAllSitesSelected 
-    ? computeCategoryStats(posts, categories)
+  const categoriesWithStats = isAllSitesSelected
+    ? flattenCategoryStatsPerSite(allSitesData.siteData)
     : singleSiteData.categoriesWithStats
 
   const isLoading = sitesLoading || dataLoading
@@ -185,12 +178,21 @@ export function Dashboard() {
   const signalsCount = signals?.length ?? 0
 
   const title = isAllSitesSelected ? "Tous les sites" : selectedSite?.name
-  const subtitle = isAllSitesSelected 
-    ? `${sites.length} sites · ${stats.total} articles au total`
+  const subtitle = isAllSitesSelected
+    ? `${sites.length} sites · ${stats.total} articles au total${
+        allSitesData.hasPendingBundles ? " (partiel)" : ""
+      }`
     : `${stats.total} articles · ${categories.length} catégories`
 
   return (
     <div className="p-8 space-y-8 max-w-7xl mx-auto">
+      {isAllSitesSelected && allSitesData.hasPendingBundles && (
+        <BundleProgressBanner
+          ready={allSitesData.bundlesReadyCount}
+          total={allSitesData.bundlesTotalCount}
+        />
+      )}
+
       {/* KPIs */}
       <div className="grid grid-cols-4 gap-5">
         <StatCard
@@ -245,7 +247,14 @@ export function Dashboard() {
 
             <div className="p-2 max-h-96 overflow-y-auto">
               {categoriesWithStats.map((category) => (
-                <CategoryRow key={category.id} category={category} />
+                <CategoryRow
+                  key={
+                    "siteId" in category && category.siteId
+                      ? `${category.siteId}-${category.id}`
+                      : String(category.id)
+                  }
+                  category={category}
+                />
               ))}
               {categoriesWithStats.length === 0 && (
                 <p className="text-sm text-stone-400 p-3 text-center">
@@ -267,7 +276,17 @@ export function Dashboard() {
               {priorityPosts.length > 0 ? (
                 <div className="space-y-1">
                   {priorityPosts.map((post) => (
-                    <PriorityArticle key={post.id} post={post} categories={categories} showSite={isAllSitesSelected} />
+                    <PriorityArticle
+                      key={
+                        "_siteId" in post && post._siteId
+                          ? `${post._siteId}-${post.id}`
+                          : String(post.id)
+                      }
+                      post={post}
+                      categories={categories}
+                      showSite={isAllSitesSelected}
+                      siteData={isAllSitesSelected ? allSitesData.siteData : undefined}
+                    />
                   ))}
                 </div>
               ) : (

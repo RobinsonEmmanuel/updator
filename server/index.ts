@@ -1,5 +1,6 @@
 import express from "express"
 import cors from "cors"
+import compression from "compression"
 import { connectDB } from "./db"
 import sitesRouter from "./routes/wpSites"
 import userSitesRouter from "./routes/userSites"
@@ -7,6 +8,7 @@ import wpProxyRouter from "./routes/wpProxy"
 import signalsRouter from "./routes/signals"
 import draftsRouter from "./routes/drafts"
 import authRouter from "./routes/auth"
+import clusterMappingsRouter from "./routes/clusterMappings"
 import { requireAuth } from "./middleware/requireAuth"
 import { Signal } from "./models/Signal"
 import { Draft } from "./models/Draft"
@@ -15,6 +17,7 @@ const app = express()
 const PORT = process.env.PORT || 3001
 
 // Middleware
+app.use(compression())
 app.use(cors())
 app.use(express.json())
 
@@ -25,6 +28,7 @@ app.use("/api/user/sites", requireAuth, userSitesRouter)
 app.use("/api/wp-proxy", requireAuth, wpProxyRouter)
 app.use("/api/signals", requireAuth, signalsRouter)
 app.use("/api/drafts", requireAuth, draftsRouter)
+app.use("/api/cluster-mappings", requireAuth, clusterMappingsRouter)
 
 // Health check
 app.get("/api/health", (_req, res) => {

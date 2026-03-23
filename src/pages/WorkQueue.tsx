@@ -1,10 +1,11 @@
 import { useSearchParams, Link } from "react-router-dom"
 import { Search, X, Calendar, ChevronRight, Filter, Clock, ChevronDown, Settings, Loader2 } from "lucide-react"
 import { useState, useMemo, useRef, useEffect } from "react"
-import { useWpSiteData, useAllSitesData } from "@/hooks"
+import { BundleProgressBanner } from "@/components/shared"
+import { useWpSiteData, useAllSitesData, type WpPostWithSite } from "@/hooks"
 import { useSiteContext } from "@/lib/SiteContext"
 import { cn } from "@/lib/utils"
-import type { WpPost, WpCategory } from "@/types/wordpress"
+import type { WpPostListItem, WpCategoryListItem } from "@/types/wordpress"
 
 function formatDate(dateString: string): string {
   const date = new Date(dateString)
@@ -68,22 +69,30 @@ export function WorkQueue() {
   const [searchParams, setSearchParams] = useSearchParams()
   const { selectedSite, hasNoSites, isLoading: sitesLoading, isAllSitesSelected } = useSiteContext()
   
-  const categoryId = searchParams.get("categoryId") 
-    ? parseInt(searchParams.get("categoryId")!) 
+  const categoryId = searchParams.get("categoryId")
+    ? parseInt(searchParams.get("categoryId")!, 10)
     : undefined
+  const siteIdFilter = searchParams.get("siteId") || undefined
   const [searchQuery, setSearchQuery] = useState("")
   const [activeFilters, setActiveFilters] = useState<Set<FilterType>>(new Set())
   const [categoryDropdownOpen, setCategoryDropdownOpen] = useState(false)
   const categoryDropdownRef = useRef<HTMLDivElement>(null)
 
   const singleSiteData = useWpSiteData(selectedSite)
-  const allSitesData = useAllSitesData()
+  const allSitesData = useAllSitesData({ enabled: isAllSitesSelected })
 
-  const posts: WpPost[] = isAllSitesSelected ? allSitesData.allPosts : singleSiteData.posts
-  const categories: WpCategory[] = isAllSitesSelected ? allSitesData.allCategories : singleSiteData.categories
+  const posts: WpPostListItem[] = isAllSitesSelected ? allSitesData.allPosts : singleSiteData.posts
+  const categories: WpCategoryListItem[] = isAllSitesSelected ? allSitesData.allCategories : singleSiteData.categories
   const dataLoading = isAllSitesSelected ? allSitesData.isLoading : singleSiteData.isLoading
 
-  const selectedCategory = categories?.find(c => c.id === categoryId)
+  const selectedCategory = useMemo(() => {
+    if (categoryId === undefined) return undefined
+    if (siteIdFilter && isAllSitesSelected) {
+      const sd = allSitesData.siteData.find((s) => s.siteId === siteIdFilter)
+      return sd?.categories.find((c) => c.id === categoryId)
+    }
+    return categories?.find((c) => c.id === categoryId)
+  }, [categoryId, siteIdFilter, isAllSitesSelected, categories, allSitesData.siteData])
   const isLoading = sitesLoading || dataLoading
 
   useEffect(() => {
@@ -115,10 +124,17 @@ export function WorkQueue() {
   const filteredPosts = useMemo(() => {
     if (!posts) return []
     
-    let result: WpPost[] = posts
+    let result: WpPostListItem[] = posts
 
-    if (categoryId) {
-      result = result.filter(p => p.categories.includes(categoryId))
+    if (categoryId !== undefined) {
+      result = result.filter((p) => {
+        if (!p.categories.includes(categoryId)) return false
+        if (siteIdFilter) {
+          const wp = p as WpPostWithSite
+          return wp._siteId === siteIdFilter
+        }
+        return true
+      })
     }
     
     if (searchQuery) {
@@ -133,7 +149,7 @@ export function WorkQueue() {
     }
 
     return result
-  }, [posts, categoryId, searchQuery, activeFilters])
+  }, [posts, categoryId, siteIdFilter, searchQuery, activeFilters])
 
   const sortedPosts = useMemo(() => {
     return [...filteredPosts].sort((a, b) => 
@@ -143,21 +159,52 @@ export function WorkQueue() {
 
   const clearCategoryFilter = () => {
     searchParams.delete("categoryId")
+    searchParams.delete("siteId")
     setSearchParams(searchParams)
   }
 
-  const selectCategory = (id: number | null) => {
+  const selectCategory = (id: number | null, forSiteId?: string) => {
     if (id) {
       searchParams.set("categoryId", id.toString())
+      if (forSiteId) searchParams.set("siteId", forSiteId)
+      else searchParams.delete("siteId")
     } else {
       searchParams.delete("categoryId")
+      searchParams.delete("siteId")
     }
     setSearchParams(searchParams)
     setCategoryDropdownOpen(false)
   }
 
-  const getCategoryName = (postCategories: number[]) => {
-    const cat = categories?.find(c => postCategories.includes(c.id))
+  const categoryDropdownItems = useMemo(() => {
+    if (isAllSitesSelected) {
+      return allSitesData.siteData.flatMap((sd) =>
+        sd.categories
+          .filter((c) => c.count > 0)
+          .map((c) => ({
+            category: c,
+            siteId: sd.siteId,
+            siteName: sd.siteName,
+          }))
+      )
+    }
+    return (categories ?? [])
+      .filter((c) => c.count > 0)
+      .map((c) => ({
+        category: c,
+        siteId: undefined as string | undefined,
+        siteName: undefined as string | undefined,
+      }))
+  }, [isAllSitesSelected, allSitesData.siteData, categories])
+
+  const getCategoryName = (post: WpPostListItem) => {
+    const wp = post as WpPostWithSite
+    if (isAllSitesSelected && wp._siteId) {
+      const sd = allSitesData.siteData.find((s) => s.siteId === wp._siteId)
+      const cat = sd?.categories.find((c) => post.categories.includes(c.id))
+      return cat?.name ?? "Sans catégorie"
+    }
+    const cat = categories?.find((c) => post.categories.includes(c.id))
     return cat?.name ?? "Sans catégorie"
   }
 
@@ -181,6 +228,15 @@ export function WorkQueue() {
               : "Gérez vos articles à mettre à jour"}
         </p>
       </div>
+
+      {isAllSitesSelected && allSitesData.hasPendingBundles && (
+        <div className="mb-5">
+          <BundleProgressBanner
+            ready={allSitesData.bundlesReadyCount}
+            total={allSitesData.bundlesTotalCount}
+          />
+        </div>
+      )}
 
       {/* Filtres */}
       <div className="flex flex-wrap items-center gap-3 mb-6">
@@ -224,17 +280,29 @@ export function WorkQueue() {
                 Toutes les catégories
               </button>
               <div className="h-px bg-stone-100 my-1" />
-              {categories?.filter(c => c.count > 0).map(category => (
+              {categoryDropdownItems.map(({ category, siteId: optSiteId, siteName }) => (
                 <button
-                  key={category.id}
-                  onClick={() => selectCategory(category.id)}
+                  key={optSiteId ? `${optSiteId}-${category.id}` : String(category.id)}
+                  type="button"
+                  onClick={() => selectCategory(category.id, optSiteId)}
                   className={cn(
                     "w-full text-left px-4 py-2 text-sm transition-colors flex items-center justify-between",
-                    categoryId === category.id ? "bg-orange-50 text-orange-700" : "text-stone-600 hover:bg-stone-50"
+                    categoryId === category.id && (siteIdFilter ? siteIdFilter === optSiteId : !optSiteId)
+                      ? "bg-orange-50 text-orange-700"
+                      : "text-stone-600 hover:bg-stone-50"
                   )}
                 >
-                  <span>{category.name}</span>
-                  <span className="text-xs text-stone-400">{category.count}</span>
+                  <span className="truncate">
+                    {siteName ? (
+                      <>
+                        <span className="text-stone-400">{siteName} · </span>
+                        {category.name}
+                      </>
+                    ) : (
+                      category.name
+                    )}
+                  </span>
+                  <span className="text-xs text-stone-400 shrink-0">{category.count}</span>
                 </button>
               ))}
             </div>
@@ -315,7 +383,11 @@ export function WorkQueue() {
         <div className="bg-white/60 backdrop-blur-sm rounded-xl shadow-sm shadow-stone-100 divide-y divide-stone-100">
           {sortedPosts.map((post) => (
             <a
-              key={post.id}
+              key={
+                "_siteId" in post && post._siteId
+                  ? `${post._siteId}-${post.id}`
+                  : String(post.id)
+              }
               href={post.link}
               target="_blank"
               rel="noopener noreferrer"
@@ -334,7 +406,7 @@ export function WorkQueue() {
                 <div className="flex items-center gap-2 mt-0.5 text-xs text-stone-400">
                   {!categoryId && (
                     <>
-                      <span>{getCategoryName(post.categories)}</span>
+                      <span>{getCategoryName(post)}</span>
                       <span>·</span>
                     </>
                   )}

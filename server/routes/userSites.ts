@@ -24,6 +24,7 @@ router.get("/", async (req: Request, res: Response) => {
       _id: conn.siteId._id,
       name: conn.siteId.name,
       url: conn.siteId.url,
+      regionIds: conn.siteId.regionIds || [],
       username: conn.username,
       hasPassword: !!conn.appPassword,
     }))
@@ -32,6 +33,42 @@ router.get("/", async (req: Request, res: Response) => {
   } catch (error) {
     console.error("Error fetching user sites:", error)
     res.status(500).json({ error: "Failed to fetch connected sites" })
+  }
+})
+
+// PATCH /api/user/sites/:siteId/regions - Update RL region IDs for a site
+router.patch("/:siteId/regions", async (req: Request, res: Response) => {
+  try {
+    const { siteId } = req.params
+    const { regionIds } = req.body as { regionIds?: unknown }
+
+    if (!Array.isArray(regionIds) || !regionIds.every((id) => typeof id === "string")) {
+      return res.status(400).json({ error: "regionIds must be a string array" })
+    }
+
+    const site = await SiteWeb.findByIdAndUpdate(
+      siteId,
+      {
+        regionIds,
+        regionsUpdatedAt: new Date(),
+      },
+      { new: true }
+    )
+
+    if (!site) {
+      return res.status(404).json({ error: "Site not found" })
+    }
+
+    res.json({
+      _id: site._id,
+      name: site.name,
+      url: site.url,
+      regionIds: site.regionIds || [],
+      regionsUpdatedAt: site.regionsUpdatedAt || null,
+    })
+  } catch (error) {
+    console.error("Error updating site regions:", error)
+    res.status(500).json({ error: "Failed to update site regions" })
   }
 })
 

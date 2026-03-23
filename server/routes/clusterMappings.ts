@@ -4,7 +4,7 @@ import { SiteWeb } from "../models/SiteWeb"
 import { Actualisateur } from "../models/Actualisateur"
 import { decryptAppPassword } from "../lib/credentialsCrypto"
 import { ArticleClusterMapping } from "../models/ArticleClusterMapping"
-import { fetchClustersForRegions } from "../lib/rlClusters"
+import { fetchClustersForRegions, fetchRegions } from "../lib/rlClusters"
 import { scorePostClusters } from "../lib/clusterScoring"
 
 const router = Router()
@@ -85,6 +85,72 @@ async function fetchWpSiteData(site: { url: string }, credentials: { username: s
   return { posts, categories }
 }
 
+// GET /api/cluster-mappings/regions/overview?siteId=...
+router.get("/regions/overview", async (req: Request, res: Response) => {
+  try {
+    const currentSiteId = typeof req.query.siteId === "string" ? req.query.siteId : undefined
+    const [regions, sites] = await Promise.all([
+      fetchRegions(req),
+      SiteWeb.find().select("_id name regionIds").lean(),
+    ])
+
+    const siteById = new Map<string, { id: string; name: string; regionIds: string[] }>(
+      sites.map((s) => [String(s._id), { id: String(s._id), name: s.name, regionIds: s.regionIds || [] }])
+    )
+
+    const assignedMap = new Map<string, { siteIds: string[]; siteNames: string[] }>()
+    for (const site of siteById.values()) {
+      for (const rid of site.regionIds) {
+        if (!assignedMap.has(rid)) assignedMap.set(rid, { siteIds: [], siteNames: [] })
+        const row = assignedMap.get(rid)!
+        row.siteIds.push(site.id)
+        row.siteNames.push(site.name)
+      }
+    }
+
+    const rlRegionIds = new Set(regions.map((r) => r.id))
+    const unknownRegionRefs = Array.from(siteById.values()).flatMap((site) =>
+      site.regionIds
+        .filter((rid) => !rlRegionIds.has(rid))
+        .map((rid) => ({
+          siteId: site.id,
+          siteName: site.name,
+          regionId: rid,
+          isCurrentSite: currentSiteId ? site.id === currentSiteId : false,
+        }))
+    )
+
+    const data = regions
+      .map((region) => {
+        const assigned = assignedMap.get(region.id) || { siteIds: [], siteNames: [] }
+        return {
+          id: region.id,
+          name: region.name,
+          lastSyncedAt: region.lastSyncedAt || null,
+          assignedSiteIds: assigned.siteIds,
+          assignedSiteNames: assigned.siteNames,
+          isAssignedToCurrentSite: currentSiteId ? assigned.siteIds.includes(currentSiteId) : false,
+          isUnassigned: assigned.siteIds.length === 0,
+        }
+      })
+      .sort((a, b) => a.name.localeCompare(b.name, "fr"))
+
+    res.json({
+      data,
+      unknownRegionRefs,
+      summary: {
+        totalRegions: data.length,
+        unassignedRegions: data.filter((r) => r.isUnassigned).length,
+        unknownRegionRefs: unknownRegionRefs.length,
+        currentSiteUnknownRefs: unknownRegionRefs.filter((r) => r.isCurrentSite).length,
+      },
+    })
+  } catch (error) {
+    console.error("Error loading regions overview:", error)
+    res.status(500).json({ error: "Failed to load regions overview" })
+  }
+})
+
 // GET /api/cluster-mappings/:siteId?status=needs_review|auto|approved|overridden
 router.get("/:siteId", async (req: Request, res: Response) => {
   try {
@@ -103,15 +169,24 @@ router.get("/:siteId", async (req: Request, res: Response) => {
       return res.status(403).json({ error: "Not connected to this site. Please add your credentials first." })
     }
 
-    const { posts, categories } = await fetchWpSiteData(site, credentials)
+    const [clustersCatalog, wpData] = await Promise.all([
+      Array.isArray(site.regionIds) && site.regionIds.length > 0
+        ? fetchClustersForRegions(req, site.regionIds)
+        : Promise.resolve([]),
+      fetchWpSiteData(site, credentials),
+    ])
+    const { posts, categories } = wpData
     const postById = new Map<number, WpPostLite>(posts.map((p) => [p.id, p]))
     const catById = new Map<number, string>(categories.map((c) => [c.id, c.name]))
+    const clusterNameById = new Map<string, string>(clustersCatalog.map((c) => [c.id, c.name]))
 
     const data = mappings.map((m) => {
       const post = postById.get(m.wpPostId)
       const categoryNames = post ? post.categories.map((id) => catById.get(id)).filter(Boolean) : []
       return {
         ...m,
+        clusterNames: (m.clusterIds || []).map((id) => clusterNameById.get(id) || id),
+        hasStaleClusterRefs: (m.sourceSignals || []).includes("stale_cluster_id"),
         post: post
           ? {
               id: post.id,
@@ -126,7 +201,15 @@ router.get("/:siteId", async (req: Request, res: Response) => {
       }
     })
 
-    res.json({ data, total: data.length, site: { _id: site._id, name: site.name, regionIds: site.regionIds || [] } })
+    const staleClusterRefsCount = data.filter((row) => row.hasStaleClusterRefs).length
+
+    res.json({
+      data,
+      total: data.length,
+      site: { _id: site._id, name: site.name, regionIds: site.regionIds || [] },
+      clustersCatalog: clustersCatalog.sort((a, b) => a.name.localeCompare(b.name, "fr")),
+      staleClusterRefsCount,
+    })
   } catch (error) {
     console.error("Error listing cluster mappings:", error)
     res.status(500).json({ error: "Failed to list cluster mappings" })

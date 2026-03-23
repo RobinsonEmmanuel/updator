@@ -1,6 +1,6 @@
 import { useState } from "react"
 import { NavLink, useNavigate } from "react-router-dom"
-import { LayoutDashboard, ListTodo, LogOut, Bell, BarChart3, Settings, Brain } from "lucide-react"
+import { LayoutDashboard, ListTodo, LogOut, Bell, BarChart3, Settings, Brain, ChevronDown, UserCircle2 } from "lucide-react"
 import { cn } from "@/lib/utils"
 import { useAuth } from "@/lib/AuthContext"
 
@@ -10,11 +10,11 @@ const navItems = [
   { to: "/signaux", label: "Signaux", icon: Bell },
   { to: "/reporting", label: "Reporting", icon: BarChart3 },
   { to: "/clusters", label: "Clusters", icon: Brain },
-  { to: "/settings", label: "Paramètres", icon: Settings },
 ]
 
 export function Sidebar() {
   const [isExpanded, setIsExpanded] = useState(false)
+  const [isUserMenuOpen, setIsUserMenuOpen] = useState(false)
   const { user, logout } = useAuth()
   const navigate = useNavigate()
 
@@ -38,7 +38,10 @@ export function Sidebar() {
           isExpanded ? "w-52" : "w-14"
         )}
         onMouseEnter={() => setIsExpanded(true)}
-        onMouseLeave={() => setIsExpanded(false)}
+        onMouseLeave={() => {
+          setIsExpanded(false)
+          setIsUserMenuOpen(false)
+        }}
       >
         {/* Logo */}
         <div className={cn(
@@ -92,33 +95,61 @@ export function Sidebar() {
           </ul>
         </nav>
 
-        {/* User + Logout */}
+        {/* User submenu */}
         <div className={cn(
           "border-t border-stone-100 py-3 px-2",
           isExpanded ? "space-y-2" : ""
         )}>
-          {isExpanded && user && (
-            <div className="px-2.5 py-1.5">
-              <p className="text-xs text-stone-400">Connecté</p>
-              <p className="text-sm font-medium text-stone-700">{user.name}</p>
+          {user && (
+            <div className="relative">
+              <button
+                onClick={() => setIsUserMenuOpen((current) => !current)}
+                className={cn(
+                  "w-full flex items-center rounded-lg hover:bg-stone-50 transition-colors",
+                  isExpanded ? "justify-between px-2.5 py-2 text-left" : "justify-center p-2"
+                )}
+                title={!isExpanded ? user.name : undefined}
+              >
+                {isExpanded ? (
+                  <>
+                    <div>
+                      <p className="text-xs text-stone-400">Connecté</p>
+                      <p className="text-sm font-medium text-stone-700">{user.name}</p>
+                    </div>
+                    <ChevronDown className={cn("h-4 w-4 text-stone-400 transition-transform", isUserMenuOpen && "rotate-180")} />
+                  </>
+                ) : (
+                  <UserCircle2 className="h-5 w-5 text-stone-500" />
+                )}
+              </button>
+
+              <div
+                className={cn(
+                  "absolute bottom-full left-0 right-0 mb-2 rounded-lg border border-stone-200 bg-white shadow-lg shadow-stone-200/40 p-1.5 z-50 transition-all duration-200 origin-bottom",
+                  isUserMenuOpen
+                    ? "opacity-100 translate-y-0 scale-100 pointer-events-auto"
+                    : "opacity-0 translate-y-1 scale-95 pointer-events-none"
+                )}
+              >
+                <NavLink
+                  to="/settings"
+                  onClick={() => setIsUserMenuOpen(false)}
+                  className="flex items-center gap-2 px-2 py-1.5 rounded-md text-sm font-medium text-stone-600 hover:bg-stone-50 hover:text-stone-800 transition-colors"
+                >
+                  <Settings className="h-4 w-4" />
+                  <span>Paramètres</span>
+                </NavLink>
+
+                <button
+                  onClick={handleLogout}
+                  className="w-full flex items-center gap-2 px-2 py-1.5 rounded-md text-sm font-medium text-stone-500 hover:bg-red-50 hover:text-red-600 transition-colors"
+                >
+                  <LogOut className="h-4 w-4 flex-shrink-0" />
+                  <span>Déconnexion</span>
+                </button>
+              </div>
             </div>
           )}
-          <button
-            onClick={handleLogout}
-            className={cn(
-              "flex items-center gap-3 px-2.5 py-2 rounded-lg text-sm font-medium text-stone-500 hover:bg-red-50 hover:text-red-600 transition-all w-full",
-              !isExpanded && "justify-center"
-            )}
-            title={!isExpanded ? "Déconnexion" : undefined}
-          >
-            <LogOut className="h-4 w-4 flex-shrink-0" />
-            <span className={cn(
-              "whitespace-nowrap transition-opacity duration-200",
-              isExpanded ? "opacity-100" : "opacity-0 w-0 overflow-hidden"
-            )}>
-              Déconnexion
-            </span>
-          </button>
         </div>
       </aside>
 

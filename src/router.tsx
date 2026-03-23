@@ -7,6 +7,7 @@ import { WorkQueue } from "@/pages/WorkQueue"
 import { ArticleEditor } from "@/pages/ArticleEditor"
 import { Signals } from "@/pages/Signals"
 import { Reporting } from "@/pages/Reporting"
+import { Settings } from "@/pages/Settings"
 
 export const router = createBrowserRouter([
   {
@@ -39,6 +40,10 @@ export const router = createBrowserRouter([
           {
             path: "reporting",
             element: <Reporting />,
+          },
+          {
+            path: "settings",
+            element: <Settings />,
           },
         ],
       },

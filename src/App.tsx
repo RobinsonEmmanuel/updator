@@ -4,14 +4,17 @@ import { router } from "@/router"
 import { queryClient } from "@/lib/queryClient"
 import { SiteProvider } from "@/lib/SiteContext"
 import { AuthProvider } from "@/lib/AuthContext"
+import { WpConfigProvider } from "@/lib/WpConfigContext"
 
 function App() {
   return (
     <QueryClientProvider client={queryClient}>
       <AuthProvider>
-        <SiteProvider>
-          <RouterProvider router={router} />
-        </SiteProvider>
+        <WpConfigProvider>
+          <SiteProvider>
+            <RouterProvider router={router} />
+          </SiteProvider>
+        </WpConfigProvider>
       </AuthProvider>
     </QueryClientProvider>
   )

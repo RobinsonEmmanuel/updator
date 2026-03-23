@@ -35,7 +35,8 @@ export type Actualiseur =
   | "Julie"
   | "Myriam"
   | "Claire"
-  | "Emmanuel"
+  | "Manu"
+  | "Farrah"
 
 export interface AffiliateLinks {
   booking: number
@@ -94,27 +95,30 @@ export interface ChecklistItem {
 }
 
 export interface Signal {
-  id: string
+  id?: string
+  _id?: string
   entityName: string
   type: SignalType
   note: string
-  siteId: string
+  siteId?: string
   clusterIds: string[]
   detectedAt: string
-  detectedBy: Actualiseur | "gpt"
-  status: "open" | "dismissed"
-  expiresAt: string
+  detectedBy: Actualiseur | "gpt" | string
+  status: "open" | "resolved" | "dismissed"
+  expiresAt?: string
+  sourceUrl?: string
 }
 
 export interface Draft {
-  id: string
+  id?: string
+  _id?: string
   articleId: string
-  siteId: string
-  clusterId: string
+  siteId?: string
+  clusterId?: string
   content: string
   checksSnapshot: Record<string, boolean | null>
   createdAt: string
   updatedAt: string
-  author: Actualiseur
+  author: Actualiseur | string
   status: DraftStatus
 }

@@ -47,6 +47,7 @@ export interface WpApiConfig {
   baseUrl: string
   username?: string
   appPassword?: string
+  language?: string
 }
 
 export interface WpPostsParams {

@@ -4,17 +4,37 @@ import { Button } from "@/components/ui/button"
 import { useAuth } from "@/lib/AuthContext"
 import type { Actualiseur } from "@/types"
 
-const actualiseurs: Actualiseur[] = ["Julie", "Myriam", "Claire", "Emmanuel"]
+const actualiseurs: Actualiseur[] = ["Julie", "Myriam", "Claire", "Manu", "Farrah"]
+
+const envMode = import.meta.env.VITE_ENVIRONMENT_MODE === "true"
 
 export function Login() {
   const [selected, setSelected] = useState<Actualiseur>("Julie")
-  const { login } = useAuth()
+  const [password, setPassword] = useState("")
+  const [loading, setLoading] = useState(false)
+  const [localError, setLocalError] = useState<string | null>(null)
+  const { login, authError, clearAuthError } = useAuth()
   const navigate = useNavigate()
 
-  const handleLogin = () => {
-    login(selected)
-    navigate("/")
+  const handleLogin = async () => {
+    clearAuthError()
+    setLocalError(null)
+    if (!envMode && !password.trim()) {
+      setLocalError("Mot de passe requis")
+      return
+    }
+    setLoading(true)
+    try {
+      await login(selected, envMode ? undefined : password)
+      navigate("/")
+    } catch {
+      // authError set by context
+    } finally {
+      setLoading(false)
+    }
   }
+
+  const displayError = localError || authError
 
   return (
     <div className="min-h-screen bg-gradient-to-br from-stone-50 to-orange-50 flex items-center justify-center p-4">
@@ -29,7 +49,7 @@ export function Login() {
                 <path d="M9 15l3 3 3-3" />
               </svg>
             </div>
-            <h1 className="text-xl font-semibold text-stone-800">Actualisator</h1>
+            <h1 className="text-xl font-semibold text-stone-800">Updator</h1>
             <p className="text-xs text-stone-500">Backoffice</p>
           </div>
 
@@ -42,6 +62,7 @@ export function Login() {
                 {actualiseurs.map((name) => (
                   <button
                     key={name}
+                    type="button"
                     onClick={() => setSelected(name)}
                     className={`p-3 rounded-xl text-sm font-medium transition-all ${
                       selected === name
@@ -55,16 +76,44 @@ export function Login() {
               </div>
             </div>
 
+            {!envMode && (
+              <div>
+                <label htmlFor="rl-password" className="block text-sm font-medium text-stone-700 mb-2">
+                  Mot de passe Region Lovers
+                </label>
+                <input
+                  id="rl-password"
+                  type="password"
+                  autoComplete="current-password"
+                  value={password}
+                  onChange={(e) => setPassword(e.target.value)}
+                  className="w-full px-3 py-2 rounded-xl border border-stone-200 text-sm focus:outline-none focus:ring-2 focus:ring-orange-500/30 focus:border-orange-400"
+                  placeholder="••••••••"
+                />
+                <p className="text-xs text-stone-400 mt-1.5">
+                  Le mot de passe est sensible à la casse (identique à Swagger / Region Lovers).
+                </p>
+              </div>
+            )}
+
+            {displayError && (
+              <p className="text-sm text-red-600" role="alert">
+                {displayError}
+              </p>
+            )}
+
             <Button
+              type="button"
               onClick={handleLogin}
-              className="w-full h-11 bg-orange-600 hover:bg-orange-700 text-white rounded-xl"
+              disabled={loading}
+              className="w-full h-11 bg-orange-600 hover:bg-orange-700 text-white rounded-xl disabled:opacity-60"
             >
-              Se connecter
+              {loading ? "Connexion…" : "Se connecter"}
             </Button>
           </div>
 
           <p className="text-xs text-stone-400 text-center mt-6">
-            Proto — connexion simplifiée
+            {envMode ? "Mode environnement — mot de passe géré côté serveur" : "Connexion Region Lovers"}
           </p>
         </div>
       </div>

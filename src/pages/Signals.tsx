@@ -1,7 +1,6 @@
-import { useState } from "react"
 import { Link } from "react-router-dom"
-import { Bell, ExternalLink, X, AlertTriangle, TrendingDown, Info, XCircle, ChevronDown, ChevronRight, HelpCircle } from "lucide-react"
-import { useOpenSignals, useClusters, useArticles } from "@/hooks"
+import { Bell, X, AlertTriangle, TrendingDown, Info, XCircle, HelpCircle, Settings } from "lucide-react"
+import { useOpenSignals } from "@/hooks"
 import { useSiteContext } from "@/lib/SiteContext"
 import { cn } from "@/lib/utils"
 import type { Signal, SignalType } from "@/types"
@@ -17,17 +16,12 @@ const defaultConfig = { icon: HelpCircle, label: "Autre", color: "text-stone-600
 
 interface SignalCardProps {
   signal: Signal
-  clusters: { id: string; name: string }[]
-  articles: { id: string; title: string; clusterId: string }[]
   onDismiss: (id: string) => void
 }
 
-function SignalCard({ signal, clusters, articles, onDismiss }: SignalCardProps) {
-  const [showArticles, setShowArticles] = useState(false)
+function SignalCard({ signal, onDismiss }: SignalCardProps) {
   const config = signalTypeConfig[signal.type] ?? defaultConfig
   const Icon = config.icon
-  const affectedClusters = clusters.filter(c => signal.clusterIds.includes(c.id))
-  const potentialArticles = articles.filter(a => signal.clusterIds.includes(a.clusterId))
 
   return (
     <div className="bg-white/60 backdrop-blur-sm rounded-xl p-5 shadow-sm shadow-stone-100 group">
@@ -46,7 +40,10 @@ function SignalCard({ signal, clusters, articles, onDismiss }: SignalCardProps) 
             </div>
 
             <button
-              onClick={() => onDismiss(signal.id)}
+              onClick={() => {
+                const id = signal.id ?? (signal._id != null ? String(signal._id) : undefined)
+                if (id) onDismiss(id)
+              }}
               className="opacity-0 group-hover:opacity-100 p-1.5 hover:bg-stone-100 rounded-lg transition-all"
               title="Ignorer ce signal"
             >
@@ -54,75 +51,65 @@ function SignalCard({ signal, clusters, articles, onDismiss }: SignalCardProps) 
             </button>
           </div>
 
-          {/* Clusters concernés */}
-          <div className="flex flex-wrap gap-1.5 mb-3">
-            {affectedClusters.map(cluster => (
-              <span
-                key={cluster.id}
-                className="text-xs px-2 py-1 bg-stone-100 text-stone-600 rounded-md"
-              >
-                {cluster.name}
-              </span>
-            ))}
-          </div>
-
           {/* Métadonnées */}
-          <div className="flex items-center gap-4 text-xs text-stone-400 mb-3">
+          <div className="flex items-center gap-4 text-xs text-stone-400">
             <span>Détecté par {signal.detectedBy === "gpt" ? "GPT" : signal.detectedBy}</span>
             <span>·</span>
             <span>{new Date(signal.detectedAt).toLocaleDateString("fr-FR")}</span>
+            {signal.sourceUrl && (
+              <>
+                <span>·</span>
+                <a 
+                  href={signal.sourceUrl} 
+                  target="_blank" 
+                  rel="noopener noreferrer"
+                  className="text-orange-600 hover:underline"
+                >
+                  Voir la source
+                </a>
+              </>
+            )}
           </div>
-
-          {/* Articles potentiellement concernés */}
-          {potentialArticles.length > 0 && (
-            <div className="border-t border-stone-100 pt-3 mt-3">
-              <button
-                onClick={() => setShowArticles(!showArticles)}
-                className="flex items-center gap-2 text-sm text-stone-600 hover:text-stone-800 transition-colors"
-              >
-                {showArticles ? (
-                  <ChevronDown className="h-4 w-4" />
-                ) : (
-                  <ChevronRight className="h-4 w-4" />
-                )}
-                <span>{potentialArticles.length} article{potentialArticles.length > 1 ? 's' : ''} potentiellement concerné{potentialArticles.length > 1 ? 's' : ''}</span>
-              </button>
-
-              {showArticles && (
-                <ul className="mt-2 space-y-1 pl-6">
-                  {potentialArticles.slice(0, 10).map(article => (
-                    <li key={article.id}>
-                      <Link
-                        to={`/article/${article.id}`}
-                        className="text-sm text-orange-600 hover:text-orange-700 hover:underline"
-                      >
-                        {article.title}
-                      </Link>
-                    </li>
-                  ))}
-                  {potentialArticles.length > 10 && (
-                    <li className="text-xs text-stone-400">
-                      + {potentialArticles.length - 10} autres articles
-                    </li>
-                  )}
-                </ul>
-              )}
-            </div>
-          )}
         </div>
       </div>
     </div>
   )
 }
 
+function NoSitesMessage() {
+  return (
+    <div className="p-8 max-w-2xl mx-auto">
+      <div className="bg-white/60 backdrop-blur-sm rounded-xl p-8 text-center shadow-sm">
+        <div className="w-16 h-16 bg-orange-100 rounded-full flex items-center justify-center mx-auto mb-4">
+          <Settings className="h-8 w-8 text-orange-500" />
+        </div>
+        <h2 className="text-lg font-medium text-stone-800 mb-2">
+          Aucun site WordPress configuré
+        </h2>
+        <p className="text-stone-500 mb-6">
+          Configurez un site WordPress pour voir les signaux.
+        </p>
+        <Link
+          to="/settings"
+          className="inline-flex items-center gap-2 px-4 py-2 bg-orange-500 text-white rounded-lg text-sm font-medium hover:bg-orange-600 transition-colors"
+        >
+          Configurer un site
+        </Link>
+      </div>
+    </div>
+  )
+}
+
 export function Signals() {
-  const { selectedSiteId } = useSiteContext()
-  const { data: signals, isLoading } = useOpenSignals(selectedSiteId ?? undefined)
-  const { data: clusters } = useClusters(selectedSiteId ?? undefined)
-  const { data: articles } = useArticles({ siteId: selectedSiteId ?? undefined })
+  const { selectedSite, hasNoSites } = useSiteContext()
+  const { data: signals, isLoading } = useOpenSignals(selectedSite?._id)
 
   const handleDismiss = (signalId: string) => {
     console.log("Dismiss signal:", signalId)
+  }
+
+  if (hasNoSites) {
+    return <NoSitesMessage />
   }
 
   const knownTypes = Object.keys(signalTypeConfig) as SignalType[]
@@ -150,7 +137,9 @@ export function Signals() {
           )}
         </div>
         <p className="text-sm text-stone-500">
-          Événements nécessitant une vérification lors de la prochaine mise à jour
+          {selectedSite 
+            ? `Signaux pour ${selectedSite.name}`
+            : "Événements nécessitant une vérification lors de la prochaine mise à jour"}
         </p>
       </div>
 
@@ -187,8 +176,6 @@ export function Signals() {
                     <SignalCard
                       key={signal.id}
                       signal={signal}
-                      clusters={clusters ?? []}
-                      articles={articles ?? []}
                       onDismiss={handleDismiss}
                     />
                   ))}

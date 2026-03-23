@@ -1,19 +1,17 @@
 import { useState, useRef, useEffect } from "react"
 import { Link } from "react-router-dom"
 import { Bell, ChevronDown, Check } from "lucide-react"
-import { useSites, useOpenSignals } from "@/hooks"
+import { useOpenSignals } from "@/hooks"
 import { useSiteContext } from "@/lib/SiteContext"
 import { cn } from "@/lib/utils"
 
 export function Header() {
   const [isOpen, setIsOpen] = useState(false)
   const dropdownRef = useRef<HTMLDivElement>(null)
-  const { selectedSiteId, setSelectedSiteId } = useSiteContext()
-  const { data: sites, isLoading: sitesLoading } = useSites()
+  const { sites, selectedSite, selectedSiteId, setSelectedSiteId, isLoading, isAllSitesSelected } = useSiteContext()
   const { data: openSignals } = useOpenSignals(selectedSiteId ?? undefined)
 
   const signalsCount = openSignals?.length ?? 0
-  const selectedSite = sites?.find(s => s.id === selectedSiteId)
 
   useEffect(() => {
     function handleClickOutside(event: MouseEvent) {
@@ -24,6 +22,19 @@ export function Header() {
     document.addEventListener("mousedown", handleClickOutside)
     return () => document.removeEventListener("mousedown", handleClickOutside)
   }, [])
+
+  if (sites.length === 0 && !isLoading) {
+    return (
+      <header className="h-14 bg-white/80 backdrop-blur-sm border-b border-stone-100 flex items-center px-6">
+        <Link 
+          to="/settings"
+          className="text-sm text-orange-600 hover:text-orange-700"
+        >
+          Configurer un site WordPress
+        </Link>
+      </header>
+    )
+  }
 
   return (
     <header className="h-14 bg-white/80 backdrop-blur-sm border-b border-stone-100 flex items-center justify-between px-6">
@@ -52,39 +63,36 @@ export function Header() {
             className="absolute top-full left-0 mt-1 w-56 bg-white rounded-xl shadow-lg shadow-stone-200/50 border border-stone-100 py-1 z-50"
             onMouseLeave={() => setIsOpen(false)}
           >
-            <button
-              onClick={() => { setSelectedSiteId(null); setIsOpen(false) }}
-              className={cn(
-                "w-full flex items-center justify-between px-4 py-2.5 text-sm transition-colors",
-                selectedSiteId === null 
-                  ? "bg-orange-50 text-orange-700" 
-                  : "text-stone-600 hover:bg-stone-50"
-              )}
-            >
-              <span>Tous les sites</span>
-              {selectedSiteId === null && <Check className="h-4 w-4" />}
-            </button>
-            
-            <div className="h-px bg-stone-100 my-1" />
-            
-            {!sitesLoading && sites?.map((site) => (
+            {sites.length > 1 && (
+              <>
+                <button
+                  onClick={() => { setSelectedSiteId(null); setIsOpen(false) }}
+                  className={cn(
+                    "w-full flex items-center justify-between px-4 py-2.5 text-sm transition-colors",
+                    isAllSitesSelected 
+                      ? "bg-orange-50 text-orange-700" 
+                      : "text-stone-600 hover:bg-stone-50"
+                  )}
+                >
+                  <span>Tous les sites</span>
+                  {isAllSitesSelected && <Check className="h-4 w-4" />}
+                </button>
+                <div className="h-px bg-stone-100 my-1" />
+              </>
+            )}
+            {sites.map((site) => (
               <button
-                key={site.id}
-                onClick={() => { setSelectedSiteId(site.id); setIsOpen(false) }}
+                key={site._id}
+                onClick={() => { setSelectedSiteId(site._id); setIsOpen(false) }}
                 className={cn(
                   "w-full flex items-center justify-between px-4 py-2.5 text-sm transition-colors",
-                  selectedSiteId === site.id 
+                  selectedSiteId === site._id 
                     ? "bg-orange-50 text-orange-700" 
                     : "text-stone-600 hover:bg-stone-50"
                 )}
               >
                 <span>{site.name}</span>
-                <div className="flex items-center gap-2">
-                  {site.todayUpdateCount >= site.maxArticlesPerDay && (
-                    <span className="text-xs px-1.5 py-0.5 rounded bg-red-100 text-red-600">quota</span>
-                  )}
-                  {selectedSiteId === site.id && <Check className="h-4 w-4" />}
-                </div>
+                {selectedSiteId === site._id && <Check className="h-4 w-4" />}
               </button>
             ))}
           </div>

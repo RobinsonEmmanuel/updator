@@ -19,6 +19,10 @@ export class WordPressClient {
   private async fetch<T>(endpoint: string, params?: Record<string, string | number | string[]>): Promise<{ data: T; headers: Headers }> {
     const url = new URL(`${this.config.baseUrl}${endpoint}`)
     
+    if (this.config.language) {
+      url.searchParams.set("wpml_language", this.config.language)
+    }
+
     if (params) {
       Object.entries(params).forEach(([key, value]) => {
         if (value !== undefined) {
@@ -83,7 +87,12 @@ export class WordPressClient {
   }
 }
 
-export function createWordPressClient(siteUrl: string, username?: string, appPassword?: string): WordPressClient {
+export function createWordPressClient(
+  siteUrl: string, 
+  username?: string, 
+  appPassword?: string,
+  language?: string
+): WordPressClient {
   const baseUrl = siteUrl.endsWith("/wp-json/wp/v2") 
     ? siteUrl 
     : `${siteUrl.replace(/\/$/, "")}/wp-json/wp/v2`
@@ -92,5 +101,6 @@ export function createWordPressClient(siteUrl: string, username?: string, appPas
     baseUrl,
     username,
     appPassword,
+    language,
   })
 }

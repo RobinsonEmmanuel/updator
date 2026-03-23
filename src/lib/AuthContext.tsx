@@ -1,5 +1,22 @@
-import { createContext, useContext, useState, useEffect, type ReactNode } from "react"
+import { createContext, useContext, useState, useEffect, useCallback, type ReactNode } from "react"
 import type { Actualiseur } from "@/types"
+import {
+  RL_ACCESS_TOKEN_KEY,
+  RL_REFRESH_TOKEN_KEY,
+  getStoredAccessToken,
+  clearRlTokens,
+} from "@/lib/api"
+import { queryClient } from "@/lib/queryClient"
+
+const AUTH_USER_KEY = "auth_user"
+
+export const EMAIL_BY_ACTUALISEUR: Record<Actualiseur, string> = {
+  Julie: "julie@regionlovers.fr",
+  Claire: "claire@regionlovers.fr",
+  Myriam: "myriam@regionlovers.fr",
+  Manu: "manu@regionlovers.fr",
+  Farrah: "farrah@regionlovers.fr",
+}
 
 interface User {
   name: Actualiseur
@@ -9,42 +26,142 @@ interface User {
 interface AuthContextValue {
   user: User | null
   isAuthenticated: boolean
-  login: (name: Actualiseur) => void
+  login: (name: Actualiseur, password?: string) => Promise<void>
   logout: () => void
+  authError: string | null
+  clearAuthError: () => void
 }
 
 const AuthContext = createContext<AuthContextValue | undefined>(undefined)
 
-const STORAGE_KEY = "auth_user"
+function decodeJwtPayload(token: string): { sub?: string; email?: string; exp?: number } | null {
+  try {
+    const p = token.split(".")[1]
+    if (!p) return null
+    const json = atob(p.replace(/-/g, "+").replace(/_/g, "/"))
+    return JSON.parse(json) as { sub?: string; email?: string; exp?: number }
+  } catch {
+    return null
+  }
+}
+
+function isTokenValid(token: string | null): boolean {
+  if (!token) return false
+  const payload = decodeJwtPayload(token)
+  if (!payload?.exp) return true
+  return payload.exp * 1000 > Date.now()
+}
+
+function readStoredUser(): User | null {
+  if (typeof window === "undefined") return null
+  const raw = localStorage.getItem(AUTH_USER_KEY)
+  if (!raw) return null
+  try {
+    return JSON.parse(raw) as User
+  } catch {
+    return null
+  }
+}
+
+function userFromToken(token: string): User | null {
+  const p = decodeJwtPayload(token)
+  if (!p?.email) return null
+  const local = (p.email.split("@")[0] ?? "").toLowerCase()
+  const cap = local.charAt(0).toUpperCase() + local.slice(1)
+  const allowed: Actualiseur[] = ["Julie", "Claire", "Myriam", "Manu", "Farrah"]
+  const name = (allowed.includes(cap as Actualiseur) ? cap : "Julie") as Actualiseur
+  return { name, email: p.email }
+}
+
+function initialUser(): User | null {
+  const token = getStoredAccessToken()
+  if (!token || !isTokenValid(token)) return null
+  const stored = readStoredUser()
+  if (stored) return stored
+  return userFromToken(token)
+}
 
 export function AuthProvider({ children }: { children: ReactNode }) {
-  const [user, setUser] = useState<User | null>(() => {
-    if (typeof window !== "undefined") {
-      const stored = localStorage.getItem(STORAGE_KEY)
-      return stored ? JSON.parse(stored) : null
+  const [user, setUser] = useState<User | null>(initialUser)
+  const [authError, setAuthError] = useState<string | null>(null)
+
+  const clearAuthError = useCallback(() => setAuthError(null), [])
+
+  useEffect(() => {
+    const token = getStoredAccessToken()
+    if (!token || !isTokenValid(token)) {
+      clearRlTokens()
+      localStorage.removeItem(AUTH_USER_KEY)
+      setUser(null)
+      return
     }
-    return null
-  })
+    setUser((prev) => prev ?? userFromToken(token))
+  }, [])
+
+  useEffect(() => {
+    const onExpired = () => {
+      setUser(null)
+      localStorage.removeItem(AUTH_USER_KEY)
+    }
+    window.addEventListener("auth:session-expired", onExpired)
+    return () => window.removeEventListener("auth:session-expired", onExpired)
+  }, [])
 
   useEffect(() => {
     if (user) {
-      localStorage.setItem(STORAGE_KEY, JSON.stringify(user))
+      localStorage.setItem(AUTH_USER_KEY, JSON.stringify(user))
     } else {
-      localStorage.removeItem(STORAGE_KEY)
+      localStorage.removeItem(AUTH_USER_KEY)
     }
   }, [user])
 
-  const login = (name: Actualiseur) => {
-    const email = `${name.toLowerCase()}@actualiseurs.com`
+  const login = async (name: Actualiseur, password?: string) => {
+    setAuthError(null)
+    const email = EMAIL_BY_ACTUALISEUR[name]
+    const res = await fetch("/api/auth/login", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ email, password: password ?? "" }),
+    })
+    const data = (await res.json().catch(() => ({}))) as { accessToken?: string; refreshToken?: string; error?: string }
+    if (!res.ok) {
+      const msg = data.error || "Connexion refusée"
+      setAuthError(typeof msg === "string" ? msg : "Connexion refusée")
+      throw new Error(typeof msg === "string" ? msg : "Connexion refusée")
+    }
+    if (!data.accessToken || !data.refreshToken) {
+      setAuthError("Réponse invalide du serveur")
+      throw new Error("Réponse invalide du serveur")
+    }
+    localStorage.setItem(RL_ACCESS_TOKEN_KEY, data.accessToken)
+    localStorage.setItem(RL_REFRESH_TOKEN_KEY, data.refreshToken)
     setUser({ name, email })
   }
 
   const logout = () => {
+    clearRlTokens()
+    localStorage.removeItem(AUTH_USER_KEY)
     setUser(null)
+    queryClient.removeQueries({ queryKey: ["connected-sites"] })
+    queryClient.removeQueries({ queryKey: ["signals"] })
+    queryClient.removeQueries({ queryKey: ["drafts"] })
+    void fetch("/api/auth/logout", { method: "POST" }).catch(() => {})
   }
 
+  const token = getStoredAccessToken()
+  const isAuthenticated = isTokenValid(token) && !!user
+
   return (
-    <AuthContext.Provider value={{ user, isAuthenticated: !!user, login, logout }}>
+    <AuthContext.Provider
+      value={{
+        user,
+        isAuthenticated,
+        login,
+        logout,
+        authError,
+        clearAuthError,
+      }}
+    >
       {children}
     </AuthContext.Provider>
   )

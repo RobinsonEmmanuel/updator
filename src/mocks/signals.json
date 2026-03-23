@@ -55,7 +55,7 @@
     "siteId": "site-italie",
     "clusterIds": ["cluster-italie-rome"],
     "detectedAt": "2026-03-10T16:00:00Z",
-    "detectedBy": "Emmanuel",
+    "detectedBy": "Manu",
     "status": "open",
     "expiresAt": "2026-04-09T16:00:00Z"
   },
@@ -115,7 +115,7 @@
     "siteId": "site-japon",
     "clusterIds": ["cluster-japon-tokyo", "cluster-japon-kyoto", "cluster-japon-osaka", "cluster-japon-bestof"],
     "detectedAt": "2026-02-28T09:00:00Z",
-    "detectedBy": "Emmanuel",
+    "detectedBy": "Manu",
     "status": "open",
     "expiresAt": "2026-03-30T09:00:00Z"
   }

@@ -1,9 +1,10 @@
-import { useSearchParams, useNavigate } from "react-router-dom"
-import { Search, X, Calendar, ChevronRight, Filter, FileEdit, Bell, ChevronDown, Clock } from "lucide-react"
+import { useSearchParams, Link } from "react-router-dom"
+import { Search, X, Calendar, ChevronRight, Filter, Clock, ChevronDown, Settings, Loader2 } from "lucide-react"
 import { useState, useMemo, useRef, useEffect } from "react"
-import { useArticles, useClusters, useSites } from "@/hooks"
+import { useWpSiteData, useAllSitesData } from "@/hooks"
 import { useSiteContext } from "@/lib/SiteContext"
 import { cn } from "@/lib/utils"
+import type { WpPost, WpCategory } from "@/types/wordpress"
 
 function formatDate(dateString: string): string {
   const date = new Date(dateString)
@@ -24,32 +25,71 @@ function isOlderThanOneYear(dateString: string): boolean {
   return date < oneYearAgo
 }
 
-type FilterType = "drafts" | "signals" | "outdated"
+function decodeHtmlEntities(str: string): string {
+  return str
+    .replace(/&#8217;/g, "'")
+    .replace(/&#8216;/g, "'")
+    .replace(/&#8220;/g, '"')
+    .replace(/&#8221;/g, '"')
+    .replace(/&amp;/g, "&")
+    .replace(/&lt;/g, "<")
+    .replace(/&gt;/g, ">")
+    .replace(/&#8211;/g, "–")
+    .replace(/&#8212;/g, "—")
+}
+
+type FilterType = "outdated"
+
+function NoSitesMessage() {
+  return (
+    <div className="p-8 max-w-2xl mx-auto">
+      <div className="bg-white/60 backdrop-blur-sm rounded-xl p-8 text-center shadow-sm">
+        <div className="w-16 h-16 bg-orange-100 rounded-full flex items-center justify-center mx-auto mb-4">
+          <Settings className="h-8 w-8 text-orange-500" />
+        </div>
+        <h2 className="text-lg font-medium text-stone-800 mb-2">
+          Aucun site WordPress configuré
+        </h2>
+        <p className="text-stone-500 mb-6">
+          Pour voir vos articles, ajoutez un site WordPress dans les paramètres.
+        </p>
+        <Link
+          to="/settings"
+          className="inline-flex items-center gap-2 px-4 py-2 bg-orange-500 text-white rounded-lg text-sm font-medium hover:bg-orange-600 transition-colors"
+        >
+          Configurer un site
+        </Link>
+      </div>
+    </div>
+  )
+}
 
 export function WorkQueue() {
   const [searchParams, setSearchParams] = useSearchParams()
-  const navigate = useNavigate()
-  const { selectedSiteId } = useSiteContext()
+  const { selectedSite, hasNoSites, isLoading: sitesLoading, isAllSitesSelected } = useSiteContext()
   
-  const clusterId = searchParams.get("clusterId") ?? undefined
+  const categoryId = searchParams.get("categoryId") 
+    ? parseInt(searchParams.get("categoryId")!) 
+    : undefined
   const [searchQuery, setSearchQuery] = useState("")
   const [activeFilters, setActiveFilters] = useState<Set<FilterType>>(new Set())
-  const [clusterDropdownOpen, setClusterDropdownOpen] = useState(false)
-  const clusterDropdownRef = useRef<HTMLDivElement>(null)
+  const [categoryDropdownOpen, setCategoryDropdownOpen] = useState(false)
+  const categoryDropdownRef = useRef<HTMLDivElement>(null)
 
-  const { data: articles, isLoading } = useArticles({ 
-    siteId: selectedSiteId ?? undefined,
-    clusterId 
-  })
-  const { data: clusters } = useClusters(selectedSiteId ?? undefined)
-  const { data: sites } = useSites()
+  const singleSiteData = useWpSiteData(selectedSite)
+  const allSitesData = useAllSitesData()
 
-  const selectedCluster = clusters?.find(c => c.id === clusterId)
+  const posts: WpPost[] = isAllSitesSelected ? allSitesData.allPosts : singleSiteData.posts
+  const categories: WpCategory[] = isAllSitesSelected ? allSitesData.allCategories : singleSiteData.categories
+  const dataLoading = isAllSitesSelected ? allSitesData.isLoading : singleSiteData.isLoading
+
+  const selectedCategory = categories?.find(c => c.id === categoryId)
+  const isLoading = sitesLoading || dataLoading
 
   useEffect(() => {
     function handleClickOutside(event: MouseEvent) {
-      if (clusterDropdownRef.current && !clusterDropdownRef.current.contains(event.target as Node)) {
-        setClusterDropdownOpen(false)
+      if (categoryDropdownRef.current && !categoryDropdownRef.current.contains(event.target as Node)) {
+        setCategoryDropdownOpen(false)
       }
     }
     document.addEventListener("mousedown", handleClickOutside)
@@ -72,70 +112,61 @@ export function WorkQueue() {
     setActiveFilters(new Set())
   }
 
-  const filteredArticles = useMemo(() => {
-    if (!articles) return []
+  const filteredPosts = useMemo(() => {
+    if (!posts) return []
     
-    let result = articles
+    let result: WpPost[] = posts
+
+    if (categoryId) {
+      result = result.filter(p => p.categories.includes(categoryId))
+    }
     
     if (searchQuery) {
-      result = result.filter(a => 
-        a.title.toLowerCase().includes(searchQuery.toLowerCase())
+      const query = searchQuery.toLowerCase()
+      result = result.filter(p => 
+        decodeHtmlEntities(p.title.rendered).toLowerCase().includes(query)
       )
     }
 
-    if (activeFilters.has("drafts")) {
-      result = result.filter(a => a.hasDraft)
-    }
-    if (activeFilters.has("signals")) {
-      result = result.filter(a => a.hasSignals)
-    }
     if (activeFilters.has("outdated")) {
-      result = result.filter(a => isOlderThanOneYear(a.lastModifiedAt))
+      result = result.filter(p => isOlderThanOneYear(p.modified))
     }
 
     return result
-  }, [articles, searchQuery, activeFilters])
+  }, [posts, categoryId, searchQuery, activeFilters])
 
-  const sortedArticles = useMemo(() => {
-    return [...filteredArticles].sort((a, b) => 
-      new Date(a.lastModifiedAt).getTime() - new Date(b.lastModifiedAt).getTime()
+  const sortedPosts = useMemo(() => {
+    return [...filteredPosts].sort((a, b) => 
+      new Date(a.modified).getTime() - new Date(b.modified).getTime()
     )
-  }, [filteredArticles])
+  }, [filteredPosts])
 
-  const clearClusterFilter = () => {
-    searchParams.delete("clusterId")
+  const clearCategoryFilter = () => {
+    searchParams.delete("categoryId")
     setSearchParams(searchParams)
   }
 
-  const selectCluster = (id: string | null) => {
+  const selectCategory = (id: number | null) => {
     if (id) {
-      searchParams.set("clusterId", id)
+      searchParams.set("categoryId", id.toString())
     } else {
-      searchParams.delete("clusterId")
+      searchParams.delete("categoryId")
     }
     setSearchParams(searchParams)
-    setClusterDropdownOpen(false)
+    setCategoryDropdownOpen(false)
   }
 
-  const getClusterName = (articleClusterId: string) => {
-    return clusters?.find(c => c.id === articleClusterId)?.name ?? ""
+  const getCategoryName = (postCategories: number[]) => {
+    const cat = categories?.find(c => postCategories.includes(c.id))
+    return cat?.name ?? "Sans catégorie"
   }
 
-  const getSiteName = (siteId: string) => {
-    return sites?.find(s => s.id === siteId)?.name ?? ""
-  }
-
-  const filterButtons: { id: FilterType; label: string; icon: typeof FileEdit }[] = [
-    { id: "outdated", label: "À actualiser", icon: Clock },
-    { id: "drafts", label: "Brouillons", icon: FileEdit },
-    { id: "signals", label: "Avec signaux", icon: Bell },
-  ]
-
-  const draftsCount = articles?.filter(a => a.hasDraft).length ?? 0
-  const signalsCount = articles?.filter(a => a.hasSignals).length ?? 0
-  const outdatedCount = articles?.filter(a => isOlderThanOneYear(a.lastModifiedAt)).length ?? 0
-
+  const outdatedCount = posts?.filter(p => isOlderThanOneYear(p.modified)).length ?? 0
   const hasActiveFilters = activeFilters.size > 0
+
+  if (hasNoSites) {
+    return <NoSitesMessage />
+  }
 
   return (
     <div className="p-8 max-w-6xl mx-auto">
@@ -143,7 +174,11 @@ export function WorkQueue() {
       <div className="mb-6">
         <h1 className="text-xl font-semibold text-stone-800 mb-1">File de travail</h1>
         <p className="text-sm text-stone-500">
-          Gérez vos articles à mettre à jour
+          {isAllSitesSelected 
+            ? "Articles de tous les sites" 
+            : selectedSite 
+              ? `Articles de ${selectedSite.name}` 
+              : "Gérez vos articles à mettre à jour"}
         </p>
       </div>
 
@@ -161,53 +196,54 @@ export function WorkQueue() {
           />
         </div>
 
-        {/* Dropdown cluster */}
-        <div className="relative" ref={clusterDropdownRef}>
+        {/* Dropdown catégorie */}
+        <div className="relative" ref={categoryDropdownRef}>
           <button
-            onClick={() => setClusterDropdownOpen(!clusterDropdownOpen)}
+            onClick={() => setCategoryDropdownOpen(!categoryDropdownOpen)}
             className={cn(
               "flex items-center gap-2 px-3 py-2 rounded-xl text-sm transition-all border",
-              selectedCluster 
+              selectedCategory 
                 ? "bg-orange-50 text-orange-700 border-orange-200" 
                 : "bg-white/60 text-stone-600 border-stone-200 hover:bg-stone-50"
             )}
           >
             <Filter className="h-4 w-4" />
-            <span>{selectedCluster?.name ?? "Tous les clusters"}</span>
-            <ChevronDown className={cn("h-4 w-4 transition-transform", clusterDropdownOpen && "rotate-180")} />
+            <span>{selectedCategory?.name ?? "Toutes les catégories"}</span>
+            <ChevronDown className={cn("h-4 w-4 transition-transform", categoryDropdownOpen && "rotate-180")} />
           </button>
 
-          {clusterDropdownOpen && (
+          {categoryDropdownOpen && (
             <div className="absolute top-full left-0 mt-1 w-56 bg-white rounded-xl shadow-lg shadow-stone-200/50 border border-stone-100 py-1 z-50 max-h-64 overflow-auto">
               <button
-                onClick={() => selectCluster(null)}
+                onClick={() => selectCategory(null)}
                 className={cn(
                   "w-full text-left px-4 py-2 text-sm transition-colors",
-                  !clusterId ? "bg-orange-50 text-orange-700" : "text-stone-600 hover:bg-stone-50"
+                  !categoryId ? "bg-orange-50 text-orange-700" : "text-stone-600 hover:bg-stone-50"
                 )}
               >
-                Tous les clusters
+                Toutes les catégories
               </button>
               <div className="h-px bg-stone-100 my-1" />
-              {clusters?.map(cluster => (
+              {categories?.filter(c => c.count > 0).map(category => (
                 <button
-                  key={cluster.id}
-                  onClick={() => selectCluster(cluster.id)}
+                  key={category.id}
+                  onClick={() => selectCategory(category.id)}
                   className={cn(
-                    "w-full text-left px-4 py-2 text-sm transition-colors",
-                    clusterId === cluster.id ? "bg-orange-50 text-orange-700" : "text-stone-600 hover:bg-stone-50"
+                    "w-full text-left px-4 py-2 text-sm transition-colors flex items-center justify-between",
+                    categoryId === category.id ? "bg-orange-50 text-orange-700" : "text-stone-600 hover:bg-stone-50"
                   )}
                 >
-                  {cluster.name}
+                  <span>{category.name}</span>
+                  <span className="text-xs text-stone-400">{category.count}</span>
                 </button>
               ))}
             </div>
           )}
         </div>
 
-        {selectedCluster && (
+        {selectedCategory && (
           <button
-            onClick={clearClusterFilter}
+            onClick={clearCategoryFilter}
             className="p-2 text-stone-400 hover:text-stone-600 hover:bg-stone-100 rounded-lg"
           >
             <X className="h-4 w-4" />
@@ -218,33 +254,26 @@ export function WorkQueue() {
       {/* Boutons de filtre type (cumulables) */}
       <div className="flex items-center gap-2 mb-6">
         <span className="text-xs text-stone-400 mr-1">Filtres :</span>
-        {filterButtons.map(btn => {
-          const count = btn.id === "drafts" ? draftsCount : btn.id === "signals" ? signalsCount : outdatedCount
-          const isActive = activeFilters.has(btn.id)
-          return (
-            <button
-              key={btn.id}
-              onClick={() => toggleFilter(btn.id)}
-              className={cn(
-                "flex items-center gap-2 px-3 py-1.5 rounded-lg text-sm font-medium transition-all border",
-                isActive
-                  ? "bg-orange-100 text-orange-700 border-orange-200"
-                  : "text-stone-500 hover:bg-stone-100 hover:text-stone-700 border-transparent"
-              )}
-            >
-              <btn.icon className="h-3.5 w-3.5" />
-              <span>{btn.label}</span>
-              {count > 0 && (
-                <span className={cn(
-                  "text-xs px-1.5 py-0.5 rounded-full",
-                  isActive ? "bg-orange-200 text-orange-800" : "bg-stone-200 text-stone-600"
-                )}>
-                  {count}
-                </span>
-              )}
-            </button>
-          )
-        })}
+        <button
+          onClick={() => toggleFilter("outdated")}
+          className={cn(
+            "flex items-center gap-2 px-3 py-1.5 rounded-lg text-sm font-medium transition-all border",
+            activeFilters.has("outdated")
+              ? "bg-orange-100 text-orange-700 border-orange-200"
+              : "text-stone-500 hover:bg-stone-100 hover:text-stone-700 border-transparent"
+          )}
+        >
+          <Clock className="h-3.5 w-3.5" />
+          <span>À actualiser (&gt;1 an)</span>
+          {outdatedCount > 0 && (
+            <span className={cn(
+              "text-xs px-1.5 py-0.5 rounded-full",
+              activeFilters.has("outdated") ? "bg-orange-200 text-orange-800" : "bg-stone-200 text-stone-600"
+            )}>
+              {outdatedCount}
+            </span>
+          )}
+        </button>
         {hasActiveFilters && (
           <button
             onClick={clearFilters}
@@ -258,22 +287,19 @@ export function WorkQueue() {
 
       {/* Résumé */}
       <p className="text-sm text-stone-500 mb-4">
-        {sortedArticles.length} article{sortedArticles.length > 1 ? 's' : ''} 
+        {sortedPosts.length} article{sortedPosts.length > 1 ? 's' : ''} 
         {hasActiveFilters && (
-          <span className="text-orange-600">
-            {" "}({Array.from(activeFilters).map(f => 
-              f === "drafts" ? "brouillons" : f === "signals" ? "signaux" : "obsolètes"
-            ).join(" + ")})
-          </span>
+          <span className="text-orange-600"> (obsolètes uniquement)</span>
         )}
       </p>
 
       {/* Liste des articles */}
       {isLoading ? (
-        <div className="flex items-center justify-center h-64 text-stone-400">
-          Chargement...
+        <div className="flex flex-col items-center justify-center h-64">
+          <Loader2 className="h-8 w-8 text-orange-500 animate-spin mb-4" />
+          <p className="text-stone-500 text-sm">Chargement des articles...</p>
         </div>
-      ) : sortedArticles.length === 0 ? (
+      ) : sortedPosts.length === 0 ? (
         <div className="flex flex-col items-center justify-center h-64 text-stone-400">
           <p>Aucun article trouvé</p>
           {hasActiveFilters && (
@@ -287,60 +313,40 @@ export function WorkQueue() {
         </div>
       ) : (
         <div className="bg-white/60 backdrop-blur-sm rounded-xl shadow-sm shadow-stone-100 divide-y divide-stone-100">
-          {sortedArticles.map((article) => (
-            <button
-              key={article.id}
-              onClick={() => navigate(`/article/${article.id}`)}
+          {sortedPosts.map((post) => (
+            <a
+              key={post.id}
+              href={post.link}
+              target="_blank"
+              rel="noopener noreferrer"
               className="w-full flex items-center gap-4 px-4 py-3 hover:bg-stone-50 transition-colors text-left group"
             >
               {/* Indicateur ancienneté */}
               <div className={`w-2 h-2 rounded-full flex-shrink-0 ${
-                isOlderThanOneYear(article.lastModifiedAt) ? "bg-red-400" : "bg-teal-400"
+                isOlderThanOneYear(post.modified) ? "bg-red-400" : "bg-teal-400"
               }`} />
 
               {/* Titre & info */}
               <div className="flex-1 min-w-0">
                 <h3 className="text-sm font-medium text-stone-700 truncate group-hover:text-stone-900">
-                  {article.title}
+                  {decodeHtmlEntities(post.title.rendered)}
                 </h3>
                 <div className="flex items-center gap-2 mt-0.5 text-xs text-stone-400">
-                  {!selectedSiteId && (
+                  {!categoryId && (
                     <>
-                      <span>{getSiteName(article.siteId)}</span>
-                      <span>·</span>
-                    </>
-                  )}
-                  {!clusterId && (
-                    <>
-                      <span>{getClusterName(article.clusterId)}</span>
+                      <span>{getCategoryName(post.categories)}</span>
                       <span>·</span>
                     </>
                   )}
                   <span className="flex items-center gap-1">
                     <Calendar className="h-3 w-3" />
-                    {formatDate(article.lastModifiedAt)}
+                    {formatDate(post.modified)}
                   </span>
                 </div>
               </div>
 
-              {/* Badges */}
-              <div className="flex items-center gap-2">
-                {article.hasDraft && (
-                  <span className="flex items-center gap-1 text-xs px-2 py-0.5 rounded-full bg-blue-50 text-blue-600">
-                    <FileEdit className="h-3 w-3" />
-                    brouillon
-                  </span>
-                )}
-                {article.hasSignals && (
-                  <span className="flex items-center gap-1 text-xs px-2 py-0.5 rounded-full bg-orange-50 text-orange-600">
-                    <Bell className="h-3 w-3" />
-                    signal
-                  </span>
-                )}
-              </div>
-
               <ChevronRight className="h-4 w-4 text-stone-300 group-hover:text-stone-400" />
-            </button>
+            </a>
           ))}
         </div>
       )}

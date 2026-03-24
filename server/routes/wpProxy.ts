@@ -5,6 +5,14 @@ import { decryptAppPassword } from "../lib/credentialsCrypto"
 import { getOrSetCache, getWpProxyTtlMs } from "../lib/wpProxyCache"
 
 const router = Router()
+function parseWpStatus(error: unknown): number | null {
+  const msg = error instanceof Error ? error.message : String(error)
+  const m = msg.match(/WordPress API error: (\d+)/)
+  if (!m) return null
+  const n = Number.parseInt(m[1], 10)
+  return Number.isNaN(n) ? null : n
+}
+
 
 /** Champs minimaux liste posts (évite content/excerpt volumineux) */
 const POST_LIST_FIELDS = "id,date,modified,slug,status,type,link,title,categories"
@@ -156,7 +164,14 @@ router.get("/:siteId/posts", async (req: Request, res: Response) => {
     res.json({ data: posts, total, totalPages: 1 })
   } catch (error) {
     console.error("Error fetching posts:", error)
-    res.status(500).json({ error: "Failed to fetch posts from WordPress" })
+    const wpStatus = parseWpStatus(error)
+    if (wpStatus === 401 || wpStatus === 403) {
+      return res.status(502).json({
+        error: "WordPress auth failed for this site connection",
+        wpStatus,
+      })
+    }
+    res.status(500).json({ error: "Failed to fetch posts from WordPress", wpStatus })
   }
 })
 
@@ -187,7 +202,14 @@ router.get("/:siteId/categories", async (req: Request, res: Response) => {
     res.json(categories)
   } catch (error) {
     console.error("Error fetching categories:", error)
-    res.status(500).json({ error: "Failed to fetch categories from WordPress" })
+    const wpStatus = parseWpStatus(error)
+    if (wpStatus === 401 || wpStatus === 403) {
+      return res.status(502).json({
+        error: "WordPress auth failed for this site connection",
+        wpStatus,
+      })
+    }
+    res.status(500).json({ error: "Failed to fetch categories from WordPress", wpStatus })
   }
 })
 

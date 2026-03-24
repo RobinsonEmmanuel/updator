@@ -8,6 +8,14 @@ import { fetchClustersForRegions, fetchRegions } from "../lib/rlClusters"
 import { scorePostClusters } from "../lib/clusterScoring"
 
 const router = Router()
+function parseWpStatus(error: unknown): number | null {
+  const msg = error instanceof Error ? error.message : String(error)
+  const m = msg.match(/WordPress API error: (\d+)/)
+  if (!m) return null
+  const n = Number.parseInt(m[1], 10)
+  return Number.isNaN(n) ? null : n
+}
+
 
 type WpPostLite = {
   id: number
@@ -212,7 +220,14 @@ router.get("/:siteId", async (req: Request, res: Response) => {
     })
   } catch (error) {
     console.error("Error listing cluster mappings:", error)
-    res.status(500).json({ error: "Failed to list cluster mappings" })
+    const wpStatus = parseWpStatus(error)
+    if (wpStatus === 401 || wpStatus === 403) {
+      return res.status(502).json({
+        error: "WordPress auth failed for this site connection",
+        wpStatus,
+      })
+    }
+    res.status(500).json({ error: "Failed to list cluster mappings", wpStatus })
   }
 })
 
@@ -310,7 +325,14 @@ router.post("/:siteId/recompute", async (req: Request, res: Response) => {
     })
   } catch (error) {
     console.error("Error recomputing cluster mappings:", error)
-    res.status(500).json({ error: "Failed to recompute cluster mappings" })
+    const wpStatus = parseWpStatus(error)
+    if (wpStatus === 401 || wpStatus === 403) {
+      return res.status(502).json({
+        error: "WordPress auth failed for this site connection",
+        wpStatus,
+      })
+    }
+    res.status(500).json({ error: "Failed to recompute cluster mappings", wpStatus })
   }
 })
 

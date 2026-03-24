@@ -3,9 +3,12 @@ stages:
 
 deploy_production:
   stage: deploy
-  image: node:20-alpine
+  image: node:20
   only:
     - main
   script:
     - npm install -g @railway/cli
+    - test -n "$RAILWAY_TOKEN" || (echo "RAILWAY_TOKEN manquant" && exit 1)
+    - test -n "$RAILWAY_SERVICE_ID" || (echo "RAILWAY_SERVICE_ID manquant" && exit 1)
+    - railway whoami
     - railway up --service "$RAILWAY_SERVICE_ID" --detach

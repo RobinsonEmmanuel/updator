@@ -14,5 +14,8 @@ deploy_production:
     # region agent log
     - node -e "const t=process.env.RAILWAY_TOKEN||'';const s=process.env.RAILWAY_SERVICE_ID||'';const tokenLooksUuid=/^[0-9a-f-]{36}$/i.test(t);const m={runId:'ci-auth-check',hypothesisId:'H6-H7',location:'.gitlab-ci.yml:script',message:'Railway vars diagnostics',data:{tokenLength:t.length,tokenHasWhitespace:/\\s/.test(t),tokenLooksUuid,tokenEqualsServiceId:t===s,serviceIdLength:s.length,serviceIdLooksUuid:/^[0-9a-f-]{36}$/i.test(s)},timestamp:Date.now()};console.log(JSON.stringify(m)); if(tokenLooksUuid){console.error('RAILWAY_TOKEN ressemble a un UUID: c\\'est probablement un service ID, pas un token Railway.'); process.exit(1);}"
     # endregion
+    # region agent log
+    - node -e "const m={runId:'ci-deploy-target',hypothesisId:'H8-H9',location:'.gitlab-ci.yml:script',message:'Railway deploy target diagnostics',data:{projectIdPresent:!!process.env.RAILWAY_PROJECT_ID,environmentIdPresent:!!process.env.RAILWAY_ENVIRONMENT_ID,serviceId:process.env.RAILWAY_SERVICE_ID?.slice(0,8)+'...'},timestamp:Date.now()};console.log(JSON.stringify(m));"
+    # endregion
     - 'railway whoami || (echo "Railway auth failed: token invalide/revoque/mal colle dans GitLab CI variable RAILWAY_TOKEN" && exit 1)'
-    - railway up --service "$RAILWAY_SERVICE_ID" --detach
+    - railway up --service "$RAILWAY_SERVICE_ID" --ci --verbose

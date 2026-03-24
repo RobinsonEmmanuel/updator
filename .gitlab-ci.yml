@@ -3,7 +3,7 @@ stages:
 
 deploy_production:
   stage: deploy
-  # Deploy backend to Railway on main branch pushes
+  # Deploy backend to Railway on pushes to main.
   image: node:20
   only:
     - main

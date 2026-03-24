@@ -11,5 +11,8 @@ deploy_production:
     - npm install -g @railway/cli
     - test -n "$RAILWAY_TOKEN" || (echo "RAILWAY_TOKEN manquant" && exit 1)
     - test -n "$RAILWAY_SERVICE_ID" || (echo "RAILWAY_SERVICE_ID manquant" && exit 1)
-    - railway whoami
+    # region agent log
+    - node -e "const t=process.env.RAILWAY_TOKEN||'';const s=process.env.RAILWAY_SERVICE_ID||'';const m={runId:'ci-auth-check',hypothesisId:'H1-H4',location:'.gitlab-ci.yml:script',message:'Railway vars diagnostics',data:{tokenLength:t.length,tokenHasWhitespace:/\\s/.test(t),serviceIdLength:s.length,serviceIdLooksUuid:/^[0-9a-f-]{36}$/i.test(s)},timestamp:Date.now()};console.log(JSON.stringify(m));"
+    # endregion
+    - railway whoami || (echo "Railway auth failed: token invalide/revoque/mal colle dans GitLab CI variable RAILWAY_TOKEN" && exit 1)
     - railway up --service "$RAILWAY_SERVICE_ID" --detach

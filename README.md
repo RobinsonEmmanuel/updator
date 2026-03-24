@@ -145,6 +145,7 @@ This avoids relying on host-specific rewrite rules.
 
 - `VITE_ENVIRONMENT_MODE=false` (or `true` if you intentionally use env mode)
 - `VITE_API_BASE_URL=https://<your-backend>.up.railway.app`
+- Do not use `*.railway.internal` in `VITE_API_BASE_URL` (private Railway network only).
 
 ### Build settings
 

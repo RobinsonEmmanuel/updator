@@ -1,6 +1,7 @@
 /** Region Lovers JWT access token (Bearer) */
 export const RL_ACCESS_TOKEN_KEY = "rl_access_token"
 export const RL_REFRESH_TOKEN_KEY = "rl_refresh_token"
+const API_BASE_URL = (import.meta.env.VITE_API_BASE_URL ?? "").trim().replace(/\/$/, "")
 
 export function getStoredAccessToken(): string | null {
   if (typeof window === "undefined") return null
@@ -18,10 +19,26 @@ export function clearRlTokens(): void {
   localStorage.removeItem(RL_REFRESH_TOKEN_KEY)
 }
 
-function isPublicApiPath(url: string): boolean {
-  if (url.startsWith("/api/auth/login")) return true
-  if (url.startsWith("/api/health")) return true
-  if (url.startsWith("/api/sites")) return true
+function getApiPath(url: string): string {
+  if (url.startsWith("/api/")) return url
+  try {
+    const parsed = new URL(url)
+    if (parsed.pathname.startsWith("/api/")) return parsed.pathname
+    return ""
+  } catch {
+    return ""
+  }
+}
+
+export function apiUrl(path: string): string {
+  if (!path.startsWith("/api/")) return path
+  return API_BASE_URL ? `${API_BASE_URL}${path}` : path
+}
+
+function isPublicApiPath(path: string): boolean {
+  if (path.startsWith("/api/auth/login")) return true
+  if (path.startsWith("/api/health")) return true
+  if (path.startsWith("/api/sites")) return true
   return false
 }
 
@@ -30,21 +47,23 @@ function isPublicApiPath(url: string): boolean {
  */
 export async function apiFetch(input: RequestInfo | URL, init?: RequestInit): Promise<Response> {
   const url = typeof input === "string" ? input : input instanceof URL ? input.href : String(input)
+  const apiPath = getApiPath(url)
+  const requestInput: RequestInfo | URL = apiPath ? apiUrl(apiPath) : input
 
   const headers = new Headers(init?.headers)
   const token = getStoredAccessToken()
-  if (token && url.startsWith("/api/") && !isPublicApiPath(url)) {
+  if (token && apiPath && !isPublicApiPath(apiPath)) {
     if (!headers.has("Authorization")) {
       headers.set("Authorization", `Bearer ${token}`)
     }
   }
 
-  const res = await fetch(input, { ...init, headers })
+  const res = await fetch(requestInput, { ...init, headers })
 
   if (
     res.status === 401 &&
-    url.startsWith("/api/") &&
-    !url.startsWith("/api/auth/login")
+    apiPath &&
+    !apiPath.startsWith("/api/auth/login")
   ) {
     clearRlTokens()
     window.dispatchEvent(new CustomEvent("auth:session-expired"))

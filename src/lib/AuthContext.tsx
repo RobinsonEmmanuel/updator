@@ -5,6 +5,7 @@ import {
   RL_REFRESH_TOKEN_KEY,
   getStoredAccessToken,
   clearRlTokens,
+  apiUrl,
 } from "@/lib/api"
 import { queryClient } from "@/lib/queryClient"
 
@@ -118,7 +119,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const login = async (name: Actualiseur, password?: string) => {
     setAuthError(null)
     const email = EMAIL_BY_ACTUALISEUR[name]
-    const res = await fetch("/api/auth/login", {
+    const res = await fetch(apiUrl("/api/auth/login"), {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ email, password: password ?? "" }),
@@ -145,7 +146,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     queryClient.removeQueries({ queryKey: ["connected-sites"] })
     queryClient.removeQueries({ queryKey: ["signals"] })
     queryClient.removeQueries({ queryKey: ["drafts"] })
-    void fetch("/api/auth/logout", { method: "POST" }).catch(() => {})
+    void fetch(apiUrl("/api/auth/logout"), { method: "POST" }).catch(() => {})
   }
 
   const token = getStoredAccessToken()

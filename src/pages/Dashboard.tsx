@@ -149,7 +149,6 @@ export function Dashboard() {
   const allSitesData = useAllSitesData({ enabled: isAllSitesSelected })
   const { data: signals } = useOpenSignals(isAllSitesSelected ? undefined : selectedSite?._id)
 
-  const posts = isAllSitesSelected ? allSitesData.allPosts : singleSiteData.posts
   const categories = isAllSitesSelected ? allSitesData.allCategories : singleSiteData.categories
   const dataLoading = isAllSitesSelected ? allSitesData.isLoading : singleSiteData.isLoading
   const stats = isAllSitesSelected ? allSitesData.stats : singleSiteData.stats

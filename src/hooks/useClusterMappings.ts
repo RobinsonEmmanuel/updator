@@ -79,8 +79,8 @@ export function useClusterMappings(siteId?: string, status?: ClusterMappingStatu
 
 export function useRecomputeClusterMappings(siteId?: string) {
   const queryClient = useQueryClient()
-  return useMutation({
-    mutationFn: async (force = false): Promise<RecomputeResponse> => {
+  return useMutation<RecomputeResponse, Error, boolean>({
+    mutationFn: async (force: boolean): Promise<RecomputeResponse> => {
       if (!siteId) throw new Error("No site selected")
       const qs = force ? "?force=1" : ""
       const res = await apiFetch(`/api/cluster-mappings/${siteId}/recompute${qs}`, {

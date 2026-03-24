@@ -1,6 +1,6 @@
 import { createContext, useContext, type ReactNode } from "react"
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query"
-import { apiFetch } from "@/lib/api"
+import { apiFetch, apiUrl } from "@/lib/api"
 import { useAuth } from "@/lib/AuthContext"
 
 export interface SiteWeb {
@@ -31,7 +31,7 @@ interface WpConfigContextType {
 const WpConfigContext = createContext<WpConfigContextType | null>(null)
 
 async function fetchAvailableSites(): Promise<SiteWeb[]> {
-  const res = await fetch("/api/sites")
+  const res = await fetch(apiUrl("/api/sites"))
   if (!res.ok) throw new Error("Failed to fetch sites")
   return res.json()
 }

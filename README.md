@@ -71,3 +71,89 @@ export default defineConfig([
   },
 ])
 ```
+
+## Deploy backend to Railway from GitLab CI
+
+This project runs an Express backend with:
+
+```bash
+npm run server
+```
+
+The included `.gitlab-ci.yml` deploys to Railway on pushes to `main` using `@railway/cli`.
+
+### 1) Create Railway token
+
+- Railway -> avatar (bottom-left) -> `Account Settings` -> `Tokens` -> `Create Token`
+- Copy token value
+
+### 2) Add GitLab CI variables
+
+In GitLab repo -> `Settings` -> `CI/CD` -> `Variables`, add:
+
+- `RAILWAY_TOKEN` = your Railway token
+- `RAILWAY_SERVICE_ID` = your Railway backend service ID
+
+Recommended:
+
+- Mark both as **Protected**
+- Mark `RAILWAY_TOKEN` as **Masked**
+
+### 3) Create empty backend service in Railway
+
+- `New Project` -> `Empty Project`
+- `Add Service` -> `Empty Service`
+- Name it `backend`
+- Open service settings and copy `Service ID`
+
+### 4) Set Railway environment variables (service -> Variables)
+
+- `MONGODB_URI=...`
+- `REGIONLOVERS_API_URL=...`
+- `RL_API_KEY=...` (if required by Region Lovers API)
+- `ENVIRONMENT_MODE=true` or `ENVIRONMENT_MODE=false` (must be boolean-like string)
+- `ENVIRONMENT_MODE_DEV_PASSWORD=...` (needed if `ENVIRONMENT_MODE=true`)
+- `WP_CREDENTIALS_SECRET=...`
+- `WP_PROXY_CACHE_TTL_MS=60000` (or your preferred TTL)
+
+### 5) Start command in Railway
+
+Service -> `Settings` -> `Deploy` -> `Start Command`:
+
+```bash
+npm run server
+```
+
+### 6) Generate domain and test
+
+Service -> `Settings` -> `Networking` -> `Generate Domain`
+
+Then verify:
+
+```bash
+https://<your-domain>.up.railway.app/api/health
+```
+
+Expected response contains `status: "ok"`.
+
+## Deploy frontend (Vercel or Netlify)
+
+The frontend can call the backend directly using `VITE_API_BASE_URL`.
+This avoids relying on host-specific rewrite rules.
+
+### Required frontend env vars
+
+- `VITE_ENVIRONMENT_MODE=false` (or `true` if you intentionally use env mode)
+- `VITE_API_BASE_URL=https://<your-backend>.up.railway.app`
+
+### Build settings
+
+- Build command: `npm run build`
+- Output directory: `dist`
+
+### Smoke test after deploy
+
+- Open frontend URL
+- Check login works
+- Open browser devtools network tab
+- Ensure API calls go to `https://<your-backend>.up.railway.app/api/...`

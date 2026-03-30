@@ -1,5 +1,4 @@
 import { createContext, useContext, useState, useEffect, useCallback, type ReactNode } from "react"
-import type { Actualiseur } from "@/types"
 import {
   RL_ACCESS_TOKEN_KEY,
   RL_REFRESH_TOKEN_KEY,
@@ -11,23 +10,15 @@ import { queryClient } from "@/lib/queryClient"
 
 const AUTH_USER_KEY = "auth_user"
 
-export const EMAIL_BY_ACTUALISEUR: Record<Actualiseur, string> = {
-  Julie: "julie@regionlovers.fr",
-  Claire: "claire@regionlovers.fr",
-  Myriam: "myriam@regionlovers.fr",
-  Manu: "manu@regionlovers.fr",
-  Farrah: "farrah@regionlovers.fr",
-}
-
 interface User {
-  name: Actualiseur
+  name: string
   email: string
 }
 
 interface AuthContextValue {
   user: User | null
   isAuthenticated: boolean
-  login: (name: Actualiseur, password?: string) => Promise<void>
+  login: (email: string, password?: string) => Promise<void>
   logout: () => void
   authError: string | null
   clearAuthError: () => void
@@ -67,10 +58,10 @@ function readStoredUser(): User | null {
 function userFromToken(token: string): User | null {
   const p = decodeJwtPayload(token)
   if (!p?.email) return null
-  const local = (p.email.split("@")[0] ?? "").toLowerCase()
-  const cap = local.charAt(0).toUpperCase() + local.slice(1)
-  const allowed: Actualiseur[] = ["Julie", "Claire", "Myriam", "Manu", "Farrah"]
-  const name = (allowed.includes(cap as Actualiseur) ? cap : "Julie") as Actualiseur
+  const local = (p.email.split("@")[0] ?? "").trim()
+  const name = local
+    ? local.charAt(0).toUpperCase() + local.slice(1)
+    : p.email
   return { name, email: p.email }
 }
 
@@ -116,9 +107,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     }
   }, [user])
 
-  const login = async (name: Actualiseur, password?: string) => {
+  const login = async (email: string, password?: string) => {
     setAuthError(null)
-    const email = EMAIL_BY_ACTUALISEUR[name]
     const res = await fetch(apiUrl("/api/auth/login"), {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -136,7 +126,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     }
     localStorage.setItem(RL_ACCESS_TOKEN_KEY, data.accessToken)
     localStorage.setItem(RL_REFRESH_TOKEN_KEY, data.refreshToken)
-    setUser({ name, email })
+    setUser(userFromToken(data.accessToken) ?? { name: email.split("@")[0] || email, email })
   }
 
   const logout = () => {

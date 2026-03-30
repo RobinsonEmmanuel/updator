@@ -2,14 +2,11 @@ import { useState } from "react"
 import { useNavigate } from "react-router-dom"
 import { Button } from "@/components/ui/button"
 import { useAuth } from "@/lib/AuthContext"
-import type { Actualiseur } from "@/types"
-
-const actualiseurs: Actualiseur[] = ["Julie", "Myriam", "Claire", "Manu", "Farrah"]
 
 const envMode = import.meta.env.VITE_ENVIRONMENT_MODE === "true"
 
 export function Login() {
-  const [selected, setSelected] = useState<Actualiseur>("Julie")
+  const [email, setEmail] = useState("")
   const [password, setPassword] = useState("")
   const [loading, setLoading] = useState(false)
   const [localError, setLocalError] = useState<string | null>(null)
@@ -19,13 +16,17 @@ export function Login() {
   const handleLogin = async () => {
     clearAuthError()
     setLocalError(null)
+    if (!email.trim()) {
+      setLocalError("Email requis")
+      return
+    }
     if (!envMode && !password.trim()) {
       setLocalError("Mot de passe requis")
       return
     }
     setLoading(true)
     try {
-      await login(selected, envMode ? undefined : password)
+      await login(email.trim(), envMode ? undefined : password)
       navigate("/")
     } catch {
       // authError set by context
@@ -56,24 +57,17 @@ export function Login() {
           <div className="space-y-4">
             <div>
               <label className="block text-sm font-medium text-stone-700 mb-2">
-                Qui êtes-vous ?
+                Email Region Lovers
               </label>
-              <div className="grid grid-cols-2 gap-2">
-                {actualiseurs.map((name) => (
-                  <button
-                    key={name}
-                    type="button"
-                    onClick={() => setSelected(name)}
-                    className={`p-3 rounded-xl text-sm font-medium transition-all ${
-                      selected === name
-                        ? "bg-orange-100 text-orange-700 ring-2 ring-orange-500"
-                        : "bg-stone-50 text-stone-600 hover:bg-stone-100"
-                    }`}
-                  >
-                    {name}
-                  </button>
-                ))}
-              </div>
+              <input
+                id="rl-email"
+                type="email"
+                autoComplete="email"
+                value={email}
+                onChange={(e) => setEmail(e.target.value)}
+                className="w-full px-3 py-2 rounded-xl border border-stone-200 text-sm focus:outline-none focus:ring-2 focus:ring-orange-500/30 focus:border-orange-400"
+                placeholder="email@regionlovers.fr"
+              />
             </div>
 
             {!envMode && (

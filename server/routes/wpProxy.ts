@@ -1,8 +1,6 @@
 import { Router, Request, Response } from "express"
-import { SiteWeb } from "../models/SiteWeb"
-import { Actualisateur } from "../models/Actualisateur"
-import { decryptAppPassword } from "../lib/credentialsCrypto"
 import { getOrSetCache, getWpProxyTtlMs } from "../lib/wpProxyCache"
+import { findCanonicalSiteById, getCanonicalUserCredentials } from "../lib/canonicalSitesStore"
 
 const router = Router()
 function parseWpStatus(error: unknown): number | null {
@@ -29,21 +27,6 @@ function appendCategoryListParams(url: URL): void {
 function isRefreshQuery(req: Request): boolean {
   const r = req.query.refresh
   return r === "1" || r === "true"
-}
-
-async function getUserCredentials(req: Request, siteId: string) {
-  const user = await Actualisateur.findById(req.rlUserId)
-  if (!user) return null
-
-  const connection = user.siteConnections.find(
-    (conn) => conn.siteId.toString() === siteId
-  )
-  if (!connection) return null
-
-  return {
-    username: connection.username,
-    appPassword: decryptAppPassword(connection.appPassword),
-  }
 }
 
 async function fetchAllPosts(baseUrl: string, auth: string): Promise<{ posts: unknown[]; total: number }> {
@@ -140,12 +123,14 @@ function cacheKey(userId: string | undefined, siteId: string, resource: "posts" 
 // GET /api/wp-proxy/:siteId/posts - Get all posts for a site
 router.get("/:siteId/posts", async (req: Request, res: Response) => {
   try {
-    const site = await SiteWeb.findById(req.params.siteId)
+    const siteId = String(req.params.siteId)
+    const rlUserId = (req as Request & { rlUserId?: string }).rlUserId
+    const site = await findCanonicalSiteById(siteId)
     if (!site) {
       return res.status(404).json({ error: "Site not found" })
     }
 
-    const credentials = await getUserCredentials(req, req.params.siteId)
+    const credentials = await getCanonicalUserCredentials(rlUserId, siteId)
     if (!credentials) {
       return res.status(403).json({ error: "Not connected to this site. Please add your credentials first." })
     }
@@ -155,7 +140,7 @@ router.get("/:siteId/posts", async (req: Request, res: Response) => {
 
     const ttl = getWpProxyTtlMs()
     const refresh = isRefreshQuery(req)
-    const key = cacheKey(req.rlUserId, req.params.siteId, "posts")
+    const key = cacheKey(rlUserId, siteId, "posts")
 
     const { posts, total } = refresh
       ? await fetchAllPosts(baseUrl, auth)
@@ -178,12 +163,14 @@ router.get("/:siteId/posts", async (req: Request, res: Response) => {
 // GET /api/wp-proxy/:siteId/categories - Get all categories for a site
 router.get("/:siteId/categories", async (req: Request, res: Response) => {
   try {
-    const site = await SiteWeb.findById(req.params.siteId)
+    const siteId = String(req.params.siteId)
+    const rlUserId = (req as Request & { rlUserId?: string }).rlUserId
+    const site = await findCanonicalSiteById(siteId)
     if (!site) {
       return res.status(404).json({ error: "Site not found" })
     }
 
-    const credentials = await getUserCredentials(req, req.params.siteId)
+    const credentials = await getCanonicalUserCredentials(rlUserId, siteId)
     if (!credentials) {
       return res.status(403).json({ error: "Not connected to this site. Please add your credentials first." })
     }
@@ -193,7 +180,7 @@ router.get("/:siteId/categories", async (req: Request, res: Response) => {
 
     const ttl = getWpProxyTtlMs()
     const refresh = isRefreshQuery(req)
-    const key = cacheKey(req.rlUserId, req.params.siteId, "categories")
+    const key = cacheKey(rlUserId, siteId, "categories")
 
     const categories = refresh
       ? await fetchCategories(baseUrl, auth)

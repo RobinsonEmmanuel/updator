@@ -2,6 +2,15 @@
 export const RL_ACCESS_TOKEN_KEY = "rl_access_token"
 export const RL_REFRESH_TOKEN_KEY = "rl_refresh_token"
 const API_BASE_URL = (import.meta.env.VITE_API_BASE_URL ?? "").trim().replace(/\/$/, "")
+const INGESTION_BASE_URL = (() => {
+  const explicit = (import.meta.env.VITE_INGESTION_SERVICE_URL ?? "").trim().replace(/\/$/, "")
+  if (explicit) return explicit
+  if (API_BASE_URL) return API_BASE_URL
+  if (typeof window !== "undefined" && (window.location.hostname === "localhost" || window.location.hostname === "127.0.0.1")) {
+    return "http://localhost:4001"
+  }
+  return ""
+})()
 
 export function getStoredAccessToken(): string | null {
   if (typeof window === "undefined") return null
@@ -35,6 +44,11 @@ export function apiUrl(path: string): string {
   return API_BASE_URL ? `${API_BASE_URL}${path}` : path
 }
 
+export function ingestionApiUrl(path: string): string {
+  if (!path.startsWith("/api/")) return path
+  return INGESTION_BASE_URL ? `${INGESTION_BASE_URL}${path}` : path
+}
+
 function isPublicApiPath(path: string): boolean {
   if (path.startsWith("/api/auth/login")) return true
   if (path.startsWith("/api/health")) return true
@@ -65,6 +79,30 @@ export async function apiFetch(input: RequestInfo | URL, init?: RequestInit): Pr
     apiPath &&
     !apiPath.startsWith("/api/auth/login")
   ) {
+    clearRlTokens()
+    window.dispatchEvent(new CustomEvent("auth:session-expired"))
+    if (window.location.pathname !== "/login") {
+      window.location.assign("/login")
+    }
+  }
+
+  return res
+}
+
+export async function ingestionFetch(input: RequestInfo | URL, init?: RequestInit): Promise<Response> {
+  const url = typeof input === "string" ? input : input instanceof URL ? input.href : String(input)
+  const apiPath = getApiPath(url)
+  const requestInput: RequestInfo | URL = apiPath ? ingestionApiUrl(apiPath) : input
+
+  const headers = new Headers(init?.headers)
+  const token = getStoredAccessToken()
+  if (token && apiPath && !isPublicApiPath(apiPath) && !headers.has("Authorization")) {
+    headers.set("Authorization", `Bearer ${token}`)
+  }
+
+  const res = await fetch(requestInput, { ...init, headers })
+
+  if (res.status === 401 && apiPath && !apiPath.startsWith("/api/auth/login")) {
     clearRlTokens()
     window.dispatchEvent(new CustomEvent("auth:session-expired"))
     if (window.location.pathname !== "/login") {

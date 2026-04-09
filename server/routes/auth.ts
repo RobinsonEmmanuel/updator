@@ -1,6 +1,4 @@
 import { Router, Request, Response } from "express"
-import jwt from "jsonwebtoken"
-import { syncUserFromRlToken } from "../lib/rlUser"
 
 const router = Router()
 
@@ -17,7 +15,7 @@ function resolveRlPassword(bodyPassword: string | undefined): string {
 }
 
 /**
- * POST /api/auth/login — Proxies to Region Lovers /auth/login and syncs Mongo user.
+ * POST /api/auth/login — Proxies to Region Lovers /auth/login.
  */
 router.post("/login", async (req: Request, res: Response) => {
   try {
@@ -66,13 +64,6 @@ router.post("/login", async (req: Request, res: Response) => {
     if (!accessToken || !refreshToken) {
       return res.status(502).json({ error: "Invalid response from auth server" })
     }
-
-    const decoded = jwt.decode(accessToken) as { sub?: string; email?: string } | null
-    if (!decoded?.sub || !decoded.email) {
-      return res.status(502).json({ error: "Invalid access token payload" })
-    }
-
-    await syncUserFromRlToken(decoded.sub, decoded.email)
 
     res.json({ accessToken, refreshToken })
   } catch (error) {

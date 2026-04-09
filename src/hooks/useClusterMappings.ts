@@ -1,5 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
-import { apiFetch } from "@/lib/api"
+import { apiFetch, ingestionFetch, ingestionApiUrl } from "@/lib/api"
 import type { ArticleClusterMappingItem, ClusterMappingStatus } from "@/types"
 
 interface MappingListResponse {
@@ -125,7 +125,7 @@ export function useUpdateSiteRegions(siteId?: string) {
   return useMutation({
     mutationFn: async (regionIds: string[]) => {
       if (!siteId) throw new Error("No site selected")
-      const res = await apiFetch(`/api/user/sites/${siteId}/regions`, {
+      const res = await ingestionFetch(ingestionApiUrl(`/api/v1/user/sites/${siteId}/regions`), {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ regionIds }),

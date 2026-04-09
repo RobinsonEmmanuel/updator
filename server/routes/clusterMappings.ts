@@ -1,11 +1,9 @@
 import { Router, Request, Response } from "express"
 import { Types } from "mongoose"
-import { SiteWeb } from "../models/SiteWeb"
-import { Actualisateur } from "../models/Actualisateur"
-import { decryptAppPassword } from "../lib/credentialsCrypto"
 import { ArticleClusterMapping } from "../models/ArticleClusterMapping"
 import { fetchClustersForRegions, fetchRegions } from "../lib/rlClusters"
 import { scorePostClusters } from "../lib/clusterScoring"
+import { findCanonicalSiteById, getCanonicalUserCredentials, listCanonicalSites } from "../lib/canonicalSitesStore"
 
 const router = Router()
 function parseWpStatus(error: unknown): number | null {
@@ -37,15 +35,9 @@ function parseWpPostId(raw: string): number | null {
   return Number.isNaN(n) ? null : n
 }
 
-async function getUserCredentials(req: Request, siteId: string) {
-  const user = await Actualisateur.findById(req.rlUserId)
-  if (!user) return null
-  const connection = user.siteConnections.find((conn) => conn.siteId.toString() === siteId)
-  if (!connection) return null
-  return {
-    username: connection.username,
-    appPassword: decryptAppPassword(connection.appPassword),
-  }
+function parseSiteObjectId(siteId: string): Types.ObjectId | null {
+  if (!Types.ObjectId.isValid(siteId)) return null
+  return new Types.ObjectId(siteId)
 }
 
 function wpAuthHeader(username: string, appPassword: string): string {
@@ -99,11 +91,11 @@ router.get("/regions/overview", async (req: Request, res: Response) => {
     const currentSiteId = typeof req.query.siteId === "string" ? req.query.siteId : undefined
     const [regions, sites] = await Promise.all([
       fetchRegions(req),
-      SiteWeb.find().select("_id name regionIds").lean(),
+      listCanonicalSites(),
     ])
 
     const siteById = new Map<string, { id: string; name: string; regionIds: string[] }>(
-      sites.map((s) => [String(s._id), { id: String(s._id), name: s.name, regionIds: s.regionIds || [] }])
+      sites.map((s) => [s._id, { id: s._id, name: s.name, regionIds: s.regionIds || [] }])
     )
 
     const assignedMap = new Map<string, { siteIds: string[]; siteNames: string[] }>()
@@ -164,15 +156,17 @@ router.get("/:siteId", async (req: Request, res: Response) => {
   try {
     const { siteId } = req.params
     const status = typeof req.query.status === "string" ? req.query.status : undefined
+    const siteObjectId = parseSiteObjectId(siteId)
+    if (!siteObjectId) return res.status(400).json({ error: "Invalid siteId" })
 
-    const site = await SiteWeb.findById(siteId)
+    const site = await findCanonicalSiteById(siteId)
     if (!site) return res.status(404).json({ error: "Site not found" })
 
-    const query: Record<string, unknown> = { siteId: new Types.ObjectId(siteId) }
+    const query: Record<string, unknown> = { siteId: siteObjectId }
     if (status) query.status = status
     const mappings = await ArticleClusterMapping.find(query).sort({ updatedAt: -1 }).lean()
 
-    const credentials = await getUserCredentials(req, siteId)
+    const credentials = await getCanonicalUserCredentials(req.rlUserId, siteId)
     if (!credentials) {
       return res.status(403).json({ error: "Not connected to this site. Please add your credentials first." })
     }
@@ -236,14 +230,16 @@ router.post("/:siteId/recompute", async (req: Request, res: Response) => {
   try {
     const { siteId } = req.params
     const force = req.query.force === "1" || req.query.force === "true"
+    const siteObjectId = parseSiteObjectId(siteId)
+    if (!siteObjectId) return res.status(400).json({ error: "Invalid siteId" })
 
-    const site = await SiteWeb.findById(siteId)
+    const site = await findCanonicalSiteById(siteId)
     if (!site) return res.status(404).json({ error: "Site not found" })
     if (!Array.isArray(site.regionIds) || site.regionIds.length === 0) {
       return res.status(400).json({ error: "Site has no regionIds configured" })
     }
 
-    const credentials = await getUserCredentials(req, siteId)
+    const credentials = await getCanonicalUserCredentials(req.rlUserId, siteId)
     if (!credentials) {
       return res.status(403).json({ error: "Not connected to this site. Please add your credentials first." })
     }
@@ -251,7 +247,7 @@ router.post("/:siteId/recompute", async (req: Request, res: Response) => {
     const [clusters, wpData, existing] = await Promise.all([
       fetchClustersForRegions(req, site.regionIds),
       fetchWpSiteData(site, credentials),
-      ArticleClusterMapping.find({ siteId: new Types.ObjectId(siteId) }),
+      ArticleClusterMapping.find({ siteId: siteObjectId }),
     ])
 
     const existingByPost = new Map<number, (typeof existing)[number]>()
@@ -283,10 +279,10 @@ router.post("/:siteId/recompute", async (req: Request, res: Response) => {
 
       ops.push(
         ArticleClusterMapping.updateOne(
-          { siteId: new Types.ObjectId(siteId), wpPostId: post.id },
+          { siteId: siteObjectId, wpPostId: post.id },
           {
             $set: {
-              siteId: new Types.ObjectId(siteId),
+              siteId: siteObjectId,
               wpPostId: post.id,
               clusterIds: score.clusterIds,
               confidence: score.confidence,
@@ -305,7 +301,7 @@ router.post("/:siteId/recompute", async (req: Request, res: Response) => {
     // Drop mappings for deleted/unavailable WP posts
     ops.push(
       ArticleClusterMapping.deleteMany({
-        siteId: new Types.ObjectId(siteId),
+        siteId: siteObjectId,
         wpPostId: { $nin: Array.from(currentWpPostIds) },
       })
     )
@@ -342,6 +338,8 @@ router.patch("/:siteId/:wpPostId", async (req: Request, res: Response) => {
     const { siteId, wpPostId: rawWpPostId } = req.params
     const wpPostId = parseWpPostId(rawWpPostId)
     if (wpPostId == null) return res.status(400).json({ error: "Invalid wpPostId" })
+    const siteObjectId = parseSiteObjectId(siteId)
+    if (!siteObjectId) return res.status(400).json({ error: "Invalid siteId" })
 
     const { clusterIds, status } = req.body as {
       clusterIds?: unknown
@@ -355,10 +353,10 @@ router.patch("/:siteId/:wpPostId", async (req: Request, res: Response) => {
     const finalStatus = status || "overridden"
 
     await ArticleClusterMapping.updateOne(
-      { siteId: new Types.ObjectId(siteId), wpPostId },
+      { siteId: siteObjectId, wpPostId },
       {
         $set: {
-          siteId: new Types.ObjectId(siteId),
+          siteId: siteObjectId,
           wpPostId,
           clusterIds,
           status: finalStatus,
@@ -371,7 +369,7 @@ router.patch("/:siteId/:wpPostId", async (req: Request, res: Response) => {
       { upsert: true }
     )
 
-    const row = await ArticleClusterMapping.findOne({ siteId: new Types.ObjectId(siteId), wpPostId }).lean()
+    const row = await ArticleClusterMapping.findOne({ siteId: siteObjectId, wpPostId }).lean()
     res.json({ success: true, data: row })
   } catch (error) {
     console.error("Error overriding cluster mapping:", error)

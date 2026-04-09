@@ -1,6 +1,6 @@
 import { createContext, useContext, type ReactNode } from "react"
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query"
-import { apiFetch, apiUrl } from "@/lib/api"
+import { ingestionFetch, ingestionApiUrl } from "@/lib/api"
 import { useAuth } from "@/lib/AuthContext"
 
 export interface SiteWeb {
@@ -31,19 +31,19 @@ interface WpConfigContextType {
 const WpConfigContext = createContext<WpConfigContextType | null>(null)
 
 async function fetchAvailableSites(): Promise<SiteWeb[]> {
-  const res = await fetch(apiUrl("/api/sites"))
+  const res = await ingestionFetch(ingestionApiUrl("/api/v1/sites"))
   if (!res.ok) throw new Error("Failed to fetch sites")
   return res.json()
 }
 
 async function fetchConnectedSites(): Promise<ConnectedSite[]> {
-  const res = await apiFetch("/api/user/sites")
+  const res = await ingestionFetch(ingestionApiUrl("/api/v1/user/sites"))
   if (!res.ok) throw new Error("Failed to fetch connected sites")
   return res.json()
 }
 
 async function connectSite(siteId: string, username: string, appPassword: string): Promise<void> {
-  const res = await apiFetch(`/api/user/sites/${siteId}/connect`, {
+  const res = await ingestionFetch(ingestionApiUrl(`/api/v1/user/sites/${siteId}/connect`), {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ username, appPassword }),
@@ -52,14 +52,14 @@ async function connectSite(siteId: string, username: string, appPassword: string
 }
 
 async function disconnectSite(siteId: string): Promise<void> {
-  const res = await apiFetch(`/api/user/sites/${siteId}/disconnect`, {
+  const res = await ingestionFetch(ingestionApiUrl(`/api/v1/user/sites/${siteId}/disconnect`), {
     method: "DELETE",
   })
   if (!res.ok) throw new Error("Failed to disconnect from site")
 }
 
 async function testSiteConnection(siteId: string, username: string, appPassword: string): Promise<{ success: boolean; postsCount?: number; categoriesCount?: number; error?: string }> {
-  const res = await apiFetch(`/api/user/sites/${siteId}/test`, {
+  const res = await ingestionFetch(ingestionApiUrl(`/api/v1/user/sites/${siteId}/test`), {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ username, appPassword }),

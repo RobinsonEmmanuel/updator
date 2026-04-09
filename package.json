@@ -73,5 +73,21 @@
     "vite": "^8.0.0",
     "vitest": "^4.1.0",
     "wait-on": "^9.0.4"
-  }
+  },
+  "description": "This template provides a minimal setup to get React working in Vite with HMR and some ESLint rules.",
+  "main": "eslint.config.js",
+  "directories": {
+    "test": "tests"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+ssh://git@gitlab.com/region-lovers/actualisation-sites.git"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "bugs": {
+    "url": "https://gitlab.com/region-lovers/actualisation-sites/issues"
+  },
+  "homepage": "https://gitlab.com/region-lovers/actualisation-sites#readme"
 }

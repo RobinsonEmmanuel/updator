@@ -2,7 +2,6 @@ import express from "express"
 import cors from "cors"
 import compression from "compression"
 import { connectDB } from "./db"
-import wpProxyRouter from "./routes/wpProxy"
 import signalsRouter from "./routes/signals"
 import draftsRouter from "./routes/drafts"
 import authRouter from "./routes/auth"
@@ -21,7 +20,6 @@ app.use(express.json())
 
 // Routes
 app.use("/api/auth", authRouter)
-app.use("/api/wp-proxy", requireAuth, wpProxyRouter)
 app.use("/api/signals", requireAuth, signalsRouter)
 app.use("/api/drafts", requireAuth, draftsRouter)
 app.use("/api/cluster-mappings", requireAuth, clusterMappingsRouter)

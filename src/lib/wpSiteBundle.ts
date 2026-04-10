@@ -1,4 +1,4 @@
-import { apiFetch } from "@/lib/api"
+import { ingestionApiUrl, ingestionFetch } from "@/lib/api"
 import type { WpPostListItem, WpCategoryListItem } from "@/types/wordpress"
 
 export interface WpSiteBundle {
@@ -10,8 +10,8 @@ export interface WpSiteBundle {
 export async function fetchWpSiteBundle(siteId: string, refresh = false): Promise<WpSiteBundle> {
   const q = refresh ? "?refresh=1" : ""
   const [postsRes, catRes] = await Promise.all([
-    apiFetch(`/api/wp-proxy/${siteId}/posts${q}`),
-    apiFetch(`/api/wp-proxy/${siteId}/categories${q}`),
+    ingestionFetch(ingestionApiUrl(`/api/v1/user/sites/${siteId}/posts${q}`)),
+    ingestionFetch(ingestionApiUrl(`/api/v1/user/sites/${siteId}/categories${q}`)),
   ])
   if (!postsRes.ok) {
     const error = await postsRes.json().catch(() => ({ error: "Unknown error" }))

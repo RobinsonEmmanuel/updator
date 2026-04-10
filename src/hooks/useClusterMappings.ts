@@ -47,7 +47,14 @@ interface RegionsOverviewResponse {
     unassignedRegions: number
     unknownRegionRefs: number
     currentSiteUnknownRefs: number
+    crossSiteWarnings: number
   }
+  crossSiteWarnings: Array<{
+    regionId: string
+    regionName: string
+    otherSiteIds: string[]
+    otherSiteNames: string[]
+  }>
 }
 
 export function useClusterMappings(siteId?: string, status?: ClusterMappingStatus) {
@@ -136,6 +143,7 @@ export function useUpdateSiteRegions(siteId?: string) {
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["connected-sites"] })
+      queryClient.invalidateQueries({ queryKey: ["available-sites"] })
       if (siteId) queryClient.invalidateQueries({ queryKey: ["cluster-mappings", siteId] })
       queryClient.invalidateQueries({ queryKey: ["regions-overview"] })
     },
@@ -147,7 +155,7 @@ export function useRegionsOverview(siteId?: string) {
     queryKey: ["regions-overview", siteId],
     queryFn: async (): Promise<RegionsOverviewResponse> => {
       const qs = siteId ? `?siteId=${siteId}` : ""
-      const res = await apiFetch(`/api/cluster-mappings/regions/overview${qs}`)
+      const res = await ingestionFetch(ingestionApiUrl(`/api/v1/regions/overview${qs}`))
       if (!res.ok) {
         const error = await res.json().catch(() => ({ error: "Unknown error" }))
         throw new Error(error.error || "Failed to load regions overview")

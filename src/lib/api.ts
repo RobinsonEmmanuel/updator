@@ -32,7 +32,7 @@ function getApiPath(url: string): string {
   if (url.startsWith("/api/")) return url
   try {
     const parsed = new URL(url)
-    if (parsed.pathname.startsWith("/api/")) return parsed.pathname
+    if (parsed.pathname.startsWith("/api/")) return `${parsed.pathname}${parsed.search}`
     return ""
   } catch {
     return ""

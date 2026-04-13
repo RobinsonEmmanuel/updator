@@ -9,9 +9,11 @@ export interface WpSiteBundle {
 
 export async function fetchWpSiteBundle(siteId: string, refresh = false): Promise<WpSiteBundle> {
   const q = refresh ? "?refresh=1" : ""
+  const postsUrl = ingestionApiUrl(`/api/v1/user/sites/${siteId}/posts${q}`)
+  const categoriesUrl = ingestionApiUrl(`/api/v1/user/sites/${siteId}/categories${q}`)
   const [postsRes, catRes] = await Promise.all([
-    ingestionFetch(ingestionApiUrl(`/api/v1/user/sites/${siteId}/posts${q}`)),
-    ingestionFetch(ingestionApiUrl(`/api/v1/user/sites/${siteId}/categories${q}`)),
+    ingestionFetch(postsUrl),
+    ingestionFetch(categoriesUrl),
   ])
   if (!postsRes.ok) {
     const error = await postsRes.json().catch(() => ({ error: "Unknown error" }))

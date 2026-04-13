@@ -1,6 +1,9 @@
 import { useState, useEffect, useRef, useMemo } from "react"
 import { Settings as SettingsIcon, Check, X, ExternalLink, Loader2, Globe, Link2, Unlink, Search, AlertTriangle } from "lucide-react"
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
 import { useWpConfig, type SiteWeb } from "@/lib/WpConfigContext"
+import { ingestionApiUrl, ingestionFetch } from "@/lib/api"
+import { useAuth } from "@/lib/AuthContext"
 import { useRegionsOverview, useUpdateSiteRegions } from "@/hooks"
 import { cn } from "@/lib/utils"
 
@@ -9,6 +12,54 @@ interface TestResult {
   message: string
   postsCount?: number
   categoriesCount?: number
+}
+
+interface SyncRunStatus {
+  runId: string
+  status: "queued" | "processing" | "completed" | "completed_with_errors" | "failed"
+  source?: "cli" | "cron" | "manual"
+  startedAt?: string
+  endedAt?: string
+  durationMs?: number
+  counts?: {
+    ok: number
+    skipped: number
+    failed: number
+  }
+  totals?: {
+    inserted: number
+    updated: number
+    softDeleted: number
+    skippedNoMatch: number
+    errorsCount: number
+  }
+}
+
+interface SyncRunHistoryResponse {
+  data: SyncRunStatus[]
+}
+
+function parseAdminEmails(): string[] {
+  const raw = (import.meta.env.VITE_INGESTION_ADMIN_EMAILS ?? "") as string
+  return raw
+    .split(",")
+    .map((value) => value.trim().toLowerCase())
+    .filter(Boolean)
+}
+
+function formatDateTime(value?: string): string {
+  if (!value) return "—"
+  const d = new Date(value)
+  if (Number.isNaN(d.getTime())) return "—"
+  return d.toLocaleString("fr-FR")
+}
+
+function formatDuration(durationMs?: number): string {
+  if (typeof durationMs !== "number" || durationMs < 0) return "—"
+  const totalSeconds = Math.floor(durationMs / 1000)
+  const minutes = Math.floor(totalSeconds / 60)
+  const seconds = totalSeconds % 60
+  return `${minutes}m ${seconds}s`
 }
 
 function ConnectModal({ 
@@ -657,11 +708,119 @@ function UnassignedRegionsModal({
   )
 }
 
+function SyncHealthCard({
+  latestRun,
+  runs,
+  isLoading,
+  isTriggering,
+  canTrigger,
+  error,
+  onTrigger,
+}: {
+  latestRun: SyncRunStatus | null
+  runs: SyncRunStatus[]
+  isLoading: boolean
+  isTriggering: boolean
+  canTrigger: boolean
+  error: string | null
+  onTrigger: () => Promise<void>
+}) {
+  const status = latestRun?.status || "—"
+  const statusClass =
+    status === "completed"
+      ? "text-green-700 bg-green-100"
+      : status === "completed_with_errors"
+        ? "text-amber-700 bg-amber-100"
+        : status === "failed"
+          ? "text-red-700 bg-red-100"
+          : "text-stone-700 bg-stone-100"
+
+  return (
+    <section className="mb-8 rounded-2xl border border-stone-200 bg-white p-5 shadow-sm">
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <div>
+          <h2 className="text-base font-semibold text-stone-900">Santé du sync articles_raw</h2>
+          <p className="text-sm text-stone-500">
+            Cron quotidien attendu: nuit (Railway Job). Source unique: `articles_raw`.
+          </p>
+        </div>
+        <button
+          type="button"
+          onClick={() => void onTrigger()}
+          disabled={!canTrigger || isTriggering}
+          className={cn(
+            "inline-flex items-center gap-2 rounded-lg px-3 py-1.5 text-sm font-medium",
+            "bg-orange-500 text-white hover:bg-orange-600 disabled:cursor-not-allowed disabled:opacity-60"
+          )}
+        >
+          {isTriggering ? <Loader2 className="h-4 w-4 animate-spin" /> : null}
+          Relancer la sync
+        </button>
+      </div>
+
+      <div className="mt-4 grid grid-cols-1 gap-3 md:grid-cols-4">
+        <div className="rounded-lg bg-stone-50 p-3">
+          <p className="text-xs uppercase tracking-wide text-stone-500">Statut</p>
+          <span className={cn("mt-1 inline-flex rounded-full px-2 py-1 text-xs font-semibold", statusClass)}>
+            {status}
+          </span>
+        </div>
+        <div className="rounded-lg bg-stone-50 p-3">
+          <p className="text-xs uppercase tracking-wide text-stone-500">Dernier run</p>
+          <p className="mt-1 text-sm text-stone-800">{formatDateTime(latestRun?.startedAt)}</p>
+        </div>
+        <div className="rounded-lg bg-stone-50 p-3">
+          <p className="text-xs uppercase tracking-wide text-stone-500">Durée</p>
+          <p className="mt-1 text-sm text-stone-800">{formatDuration(latestRun?.durationMs)}</p>
+        </div>
+        <div className="rounded-lg bg-stone-50 p-3">
+          <p className="text-xs uppercase tracking-wide text-stone-500">Compteurs</p>
+          <p className="mt-1 text-sm text-stone-800">
+            +{latestRun?.totals?.inserted || 0} / ~{latestRun?.totals?.updated || 0} / -{latestRun?.totals?.softDeleted || 0}
+          </p>
+        </div>
+      </div>
+
+      {error ? (
+        <p className="mt-3 rounded-lg bg-red-50 px-3 py-2 text-sm text-red-700">{error}</p>
+      ) : null}
+
+      <div className="mt-4">
+        <p className="mb-2 text-xs font-medium uppercase tracking-wide text-stone-500">Historique récent</p>
+        {isLoading ? (
+          <div className="py-3 text-sm text-stone-500">Chargement…</div>
+        ) : runs.length === 0 ? (
+          <div className="py-3 text-sm text-stone-500">Aucun run enregistré.</div>
+        ) : (
+          <div className="max-h-48 space-y-2 overflow-auto">
+            {runs.map((run) => (
+              <div key={run.runId} className="flex items-center justify-between rounded-lg border border-stone-100 px-3 py-2 text-xs">
+                <span className="font-mono text-stone-500">{run.runId.slice(0, 8)}</span>
+                <span className="text-stone-700">{run.source || "—"}</span>
+                <span className="text-stone-700">{run.status}</span>
+                <span className="text-stone-500">{formatDateTime(run.startedAt)}</span>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+    </section>
+  )
+}
+
 export function Settings() {
+  const { user } = useAuth()
+  const queryClient = useQueryClient()
   const { availableSites, connectedSites, isLoading, error, connectToSite, disconnectFromSite, isConnected } = useWpConfig()
   const [connectingSite, setConnectingSite] = useState<SiteWeb | null>(null)
   const [editingRegionsSite, setEditingRegionsSite] = useState<SiteWeb | null>(null)
   const [showUnassignedRegions, setShowUnassignedRegions] = useState(false)
+  const adminEmails = useMemo(() => parseAdminEmails(), [])
+  const isAdmin = useMemo(() => {
+    if (!user?.email) return false
+    if (adminEmails.length === 0) return false
+    return adminEmails.includes(user.email.trim().toLowerCase())
+  }, [adminEmails, user?.email])
 
   const regionsOverview = useRegionsOverview()
   const updateRegions = useUpdateSiteRegions(editingRegionsSite?._id)
@@ -676,6 +835,57 @@ export function Settings() {
         .map((r) => ({ id: r.id, name: r.name || r.id })),
     [regionsOverview.data?.data]
   )
+
+  const syncStatusQuery = useQuery({
+    queryKey: ["ingestion-sync-status"],
+    queryFn: async (): Promise<SyncRunStatus | null> => {
+      const res = await ingestionFetch(ingestionApiUrl("/api/v1/ingest/articles-raw-sync/status"))
+      if (!res.ok) {
+        const err = (await res.json().catch(() => ({}))) as { error?: string }
+        throw new Error(err.error || "Impossible de charger le statut du sync")
+      }
+      return (await res.json()) as SyncRunStatus | null
+    },
+    enabled: isAdmin,
+    refetchInterval: (query) => {
+      const run = query.state.data as SyncRunStatus | null
+      if (run?.status === "queued" || run?.status === "processing") return 8000
+      return 30000
+    },
+  })
+
+  const syncRunsQuery = useQuery({
+    queryKey: ["ingestion-sync-runs"],
+    queryFn: async (): Promise<SyncRunHistoryResponse> => {
+      const res = await ingestionFetch(ingestionApiUrl("/api/v1/ingest/articles-raw-sync/runs?limit=20"))
+      if (!res.ok) {
+        const err = (await res.json().catch(() => ({}))) as { error?: string }
+        throw new Error(err.error || "Impossible de charger l'historique du sync")
+      }
+      return (await res.json()) as SyncRunHistoryResponse
+    },
+    enabled: isAdmin,
+    refetchInterval: 30000,
+  })
+
+  const triggerSyncMutation = useMutation({
+    mutationFn: async () => {
+      const res = await ingestionFetch(ingestionApiUrl("/api/v1/ingest/articles-raw-sync/trigger"), {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ scope: "all", writeMode: "insert-missing" }),
+      })
+      if (!res.ok) {
+        const err = (await res.json().catch(() => ({}))) as { error?: string }
+        throw new Error(err.error || "Impossible de lancer la sync")
+      }
+      return res.json()
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["ingestion-sync-status"] })
+      queryClient.invalidateQueries({ queryKey: ["ingestion-sync-runs"] })
+    },
+  })
 
   if (error) {
     return (
@@ -694,6 +904,24 @@ export function Settings() {
 
   return (
     <div className="p-6 md:p-8 max-w-6xl mx-auto">
+      {isAdmin ? (
+        <SyncHealthCard
+          latestRun={syncStatusQuery.data || null}
+          runs={syncRunsQuery.data?.data || []}
+          isLoading={syncStatusQuery.isLoading || syncRunsQuery.isLoading}
+          isTriggering={triggerSyncMutation.isPending}
+          canTrigger={!triggerSyncMutation.isPending}
+          error={
+            (syncStatusQuery.error as Error | null)?.message ||
+            (syncRunsQuery.error as Error | null)?.message ||
+            (triggerSyncMutation.error as Error | null)?.message ||
+            null
+          }
+          onTrigger={async () => {
+            await triggerSyncMutation.mutateAsync()
+          }}
+        />
+      ) : null}
       <div className="flex items-center justify-between gap-3 mb-8">
         <div className="flex items-center gap-3">
           <div className="w-10 h-10 bg-gradient-to-br from-stone-100 to-stone-200 rounded-xl flex items-center justify-center">

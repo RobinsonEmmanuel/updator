@@ -71,12 +71,15 @@ export function useClusterMappings(siteId?: string, status?: ClusterMappingStatu
         }
       }
       const qs = status ? `?status=${status}` : ""
-      const res = await apiFetch(`/api/cluster-mappings/${siteId}${qs}`)
-      if (!res.ok) {
-        const error = await res.json().catch(() => ({ error: "Unknown error" }))
+      const ingestionRes = await ingestionFetch(ingestionApiUrl(`/api/v1/article-clusters/${siteId}${qs}`))
+      if (ingestionRes.ok) return ingestionRes.json()
+
+      const fallbackRes = await apiFetch(`/api/cluster-mappings/${siteId}${qs}`)
+      if (!fallbackRes.ok) {
+        const error = await fallbackRes.json().catch(() => ({ error: "Unknown error" }))
         throw new Error(error.error || "Failed to fetch cluster mappings")
       }
-      return res.json()
+      return fallbackRes.json()
     },
     enabled: !!siteId,
     staleTime: 2 * 60 * 1000,
@@ -90,11 +93,16 @@ export function useRecomputeClusterMappings(siteId?: string) {
     mutationFn: async (force: boolean): Promise<RecomputeResponse> => {
       if (!siteId) throw new Error("No site selected")
       const qs = force ? "?force=1" : ""
-      const res = await apiFetch(`/api/cluster-mappings/${siteId}/recompute${qs}`, {
+      const ingestionRes = await ingestionFetch(ingestionApiUrl(`/api/v1/article-clusters/${siteId}/recompute${qs}`), {
         method: "POST",
       })
-      const data = (await res.json().catch(() => ({}))) as RecomputeResponse & { error?: string }
-      if (!res.ok) throw new Error(data.error || "Failed to recompute mappings")
+      if (ingestionRes.ok) return ingestionRes.json()
+
+      const fallbackRes = await apiFetch(`/api/cluster-mappings/${siteId}/recompute${qs}`, {
+        method: "POST",
+      })
+      const data = (await fallbackRes.json().catch(() => ({}))) as RecomputeResponse & { error?: string }
+      if (!fallbackRes.ok) throw new Error(data.error || "Failed to recompute mappings")
       return data
     },
     onSuccess: () => {
@@ -110,6 +118,16 @@ export function useOverrideClusterMapping(siteId?: string) {
   return useMutation({
     mutationFn: async (payload: { wpPostId: number; clusterIds: string[]; status?: ClusterMappingStatus }) => {
       if (!siteId) throw new Error("No site selected")
+      const ingestionRes = await ingestionFetch(
+        ingestionApiUrl(`/api/v1/article-clusters/${siteId}/${payload.wpPostId}`),
+        {
+          method: "PATCH",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ clusterIds: payload.clusterIds, status: payload.status }),
+        }
+      )
+      if (ingestionRes.ok) return ingestionRes.json()
+
       const res = await apiFetch(`/api/cluster-mappings/${siteId}/${payload.wpPostId}`, {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },

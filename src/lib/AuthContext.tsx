@@ -13,6 +13,7 @@ const AUTH_USER_KEY = "auth_user"
 interface User {
   name: string
   email: string
+  role?: string
 }
 
 interface AuthContextValue {
@@ -26,12 +27,12 @@ interface AuthContextValue {
 
 const AuthContext = createContext<AuthContextValue | undefined>(undefined)
 
-function decodeJwtPayload(token: string): { sub?: string; email?: string; exp?: number } | null {
+function decodeJwtPayload(token: string): { sub?: string; email?: string; role?: string; exp?: number } | null {
   try {
     const p = token.split(".")[1]
     if (!p) return null
     const json = atob(p.replace(/-/g, "+").replace(/_/g, "/"))
-    return JSON.parse(json) as { sub?: string; email?: string; exp?: number }
+    return JSON.parse(json) as { sub?: string; email?: string; role?: string; exp?: number }
   } catch {
     return null
   }
@@ -62,15 +63,21 @@ function userFromToken(token: string): User | null {
   const name = local
     ? local.charAt(0).toUpperCase() + local.slice(1)
     : p.email
-  return { name, email: p.email }
+  return { name, email: p.email, role: p.role }
 }
 
 function initialUser(): User | null {
   const token = getStoredAccessToken()
   if (!token || !isTokenValid(token)) return null
+  const fromToken = userFromToken(token)
   const stored = readStoredUser()
-  if (stored) return stored
-  return userFromToken(token)
+  if (stored) {
+    return {
+      ...stored,
+      role: stored.role ?? fromToken?.role,
+    }
+  }
+  return fromToken
 }
 
 export function AuthProvider({ children }: { children: ReactNode }) {

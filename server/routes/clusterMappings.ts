@@ -6,6 +6,39 @@ import { scorePostClusters } from "../lib/clusterScoring"
 import { findCanonicalSiteById, getCanonicalUserCredentials, listCanonicalSites } from "../lib/canonicalSitesStore"
 
 const router = Router()
+const clusterMappingsSource = (process.env.CLUSTER_MAPPINGS_SOURCE || "hybrid").toLowerCase()
+
+function shouldTryRemoteClusterService(): boolean {
+  return clusterMappingsSource === "remote" || clusterMappingsSource === "hybrid"
+}
+
+function isRemoteOnly(): boolean {
+  return clusterMappingsSource === "remote"
+}
+
+function ingestionBaseUrl(): string {
+  const explicit = (process.env.INGESTION_SERVICE_URL || "").trim().replace(/\/$/, "")
+  if (explicit) return explicit
+  return "http://localhost:4001"
+}
+
+async function fetchIngestionJson(
+  req: Request,
+  path: string,
+  init?: RequestInit
+): Promise<{ ok: boolean; status: number; data: any }> {
+  const headers = new Headers(init?.headers)
+  if (req.headers.authorization && !headers.has("Authorization")) {
+    headers.set("Authorization", req.headers.authorization)
+  }
+  const response = await fetch(`${ingestionBaseUrl()}${path}`, {
+    ...init,
+    headers,
+  })
+  const data = await response.json().catch(() => ({ error: "Invalid JSON response" }))
+  return { ok: response.ok, status: response.status, data }
+}
+
 function parseWpStatus(error: unknown): number | null {
   const msg = error instanceof Error ? error.message : String(error)
   const m = msg.match(/WordPress API error: (\d+)/)
@@ -164,6 +197,25 @@ router.get("/:siteId", async (req: Request, res: Response) => {
 
     const query: Record<string, unknown> = { siteId: siteObjectId }
     if (status) query.status = status
+
+    if (shouldTryRemoteClusterService()) {
+      const qs = status ? `?status=${encodeURIComponent(status)}` : ""
+      try {
+        const remote = await fetchIngestionJson(req, `/api/v1/article-clusters/${siteId}${qs}`)
+        if (remote.ok) return res.status(200).json(remote.data)
+        if (isRemoteOnly()) return res.status(remote.status).json(remote.data)
+        console.warn(`[cluster-mappings] remote list failed (${remote.status}), fallback local`)
+      } catch (error) {
+        if (isRemoteOnly()) {
+          return res.status(502).json({
+            error: "Remote ingestion cluster service unavailable",
+            details: error instanceof Error ? error.message : String(error),
+          })
+        }
+        console.warn("[cluster-mappings] remote list unavailable, fallback local", error)
+      }
+    }
+
     const mappings = await ArticleClusterMapping.find(query).sort({ updatedAt: -1 }).lean()
 
     const credentials = await getCanonicalUserCredentials(req.rlUserId, siteId)
@@ -242,6 +294,28 @@ router.post("/:siteId/recompute", async (req: Request, res: Response) => {
     const credentials = await getCanonicalUserCredentials(req.rlUserId, siteId)
     if (!credentials) {
       return res.status(403).json({ error: "Not connected to this site. Please add your credentials first." })
+    }
+
+    if (shouldTryRemoteClusterService()) {
+      const qs = force ? "?force=1" : ""
+      try {
+        const remote = await fetchIngestionJson(
+          req,
+          `/api/v1/article-clusters/${siteId}/recompute${qs}`,
+          { method: "POST" }
+        )
+        if (remote.ok) return res.status(200).json(remote.data)
+        if (isRemoteOnly()) return res.status(remote.status).json(remote.data)
+        console.warn(`[cluster-mappings] remote recompute failed (${remote.status}), fallback local`)
+      } catch (error) {
+        if (isRemoteOnly()) {
+          return res.status(502).json({
+            error: "Remote ingestion cluster service unavailable",
+            details: error instanceof Error ? error.message : String(error),
+          })
+        }
+        console.warn("[cluster-mappings] remote recompute unavailable, fallback local", error)
+      }
     }
 
     const [clusters, wpData, existing] = await Promise.all([
@@ -351,6 +425,31 @@ router.patch("/:siteId/:wpPostId", async (req: Request, res: Response) => {
     }
 
     const finalStatus = status || "overridden"
+
+    if (shouldTryRemoteClusterService()) {
+      try {
+        const remote = await fetchIngestionJson(
+          req,
+          `/api/v1/article-clusters/${siteId}/${wpPostId}`,
+          {
+            method: "PATCH",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ clusterIds, status: finalStatus }),
+          }
+        )
+        if (remote.ok) return res.status(200).json(remote.data)
+        if (isRemoteOnly()) return res.status(remote.status).json(remote.data)
+        console.warn(`[cluster-mappings] remote override failed (${remote.status}), fallback local`)
+      } catch (error) {
+        if (isRemoteOnly()) {
+          return res.status(502).json({
+            error: "Remote ingestion cluster service unavailable",
+            details: error instanceof Error ? error.message : String(error),
+          })
+        }
+        console.warn("[cluster-mappings] remote override unavailable, fallback local", error)
+      }
+    }
 
     await ArticleClusterMapping.updateOne(
       { siteId: siteObjectId, wpPostId },

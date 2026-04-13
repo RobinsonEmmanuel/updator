@@ -39,14 +39,6 @@ interface SyncRunHistoryResponse {
   data: SyncRunStatus[]
 }
 
-function parseAdminEmails(): string[] {
-  const raw = (import.meta.env.VITE_INGESTION_ADMIN_EMAILS ?? "") as string
-  return raw
-    .split(",")
-    .map((value) => value.trim().toLowerCase())
-    .filter(Boolean)
-}
-
 function formatDateTime(value?: string): string {
   if (!value) return "—"
   const d = new Date(value)
@@ -815,12 +807,7 @@ export function Settings() {
   const [connectingSite, setConnectingSite] = useState<SiteWeb | null>(null)
   const [editingRegionsSite, setEditingRegionsSite] = useState<SiteWeb | null>(null)
   const [showUnassignedRegions, setShowUnassignedRegions] = useState(false)
-  const adminEmails = useMemo(() => parseAdminEmails(), [])
-  const isAdmin = useMemo(() => {
-    if (!user?.email) return false
-    if (adminEmails.length === 0) return false
-    return adminEmails.includes(user.email.trim().toLowerCase())
-  }, [adminEmails, user?.email])
+  const isAdmin = user?.role === "admin"
 
   const regionsOverview = useRegionsOverview()
   const updateRegions = useUpdateSiteRegions(editingRegionsSite?._id)

@@ -9,6 +9,7 @@ import { Signals } from "@/pages/Signals"
 import { Reporting } from "@/pages/Reporting"
 import { Settings } from "@/pages/Settings"
 import { ClusterMappings } from "@/pages/ClusterMappings"
+import { PoiArticleCatchup } from "@/pages/PoiArticleCatchup"
 
 export const router = createBrowserRouter([
   {
@@ -45,6 +46,10 @@ export const router = createBrowserRouter([
           {
             path: "settings",
             element: <Settings />,
+          },
+          {
+            path: "rattrapage-poi",
+            element: <PoiArticleCatchup />,
           },
           {
             path: "clusters",

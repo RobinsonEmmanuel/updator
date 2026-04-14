@@ -2,8 +2,13 @@ import { Router, Request, Response } from "express"
 
 const router = Router()
 
-function regionLoversBaseUrl(): string {
-  return (process.env.REGIONLOVERS_API_URL || "https://api-prod.regionlovers.ai").replace(/\/$/, "")
+function regionLoversAuthBaseUrl(): string {
+  return (
+    process.env.REGIONLOVERS_API_AUTH_URL ||
+    process.env.REGIONLOVERS_API_READ_URL ||
+    process.env.REGIONLOVERS_API_URL ||
+    "https://api-prod.regionlovers.ai"
+  ).replace(/\/$/, "")
 }
 
 function resolveRlPassword(bodyPassword: string | undefined): string {
@@ -29,7 +34,7 @@ router.post("/login", async (req: Request, res: Response) => {
       return res.status(400).json({ error: "password is required" })
     }
 
-    const baseUrl = regionLoversBaseUrl()
+    const baseUrl = regionLoversAuthBaseUrl()
     const headers: Record<string, string> = {
       accept: "*/*",
       "Content-Type": "application/json",

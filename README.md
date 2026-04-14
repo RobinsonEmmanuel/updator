@@ -109,7 +109,10 @@ Recommended:
 ### 4) Set Railway environment variables (service -> Variables)
 
 - `MONGODB_URI=...`
-- `REGIONLOVERS_API_URL=...`
+- `REGIONLOVERS_API_READ_URL=...` (lecture RL)
+- `REGIONLOVERS_API_WRITE_URL=...` (écriture RL future)
+- `REGIONLOVERS_API_AUTH_URL=...` (optionnel, pour `/auth/login`)
+- `REGIONLOVERS_API_URL=...` (fallback legacy)
 - `RL_API_KEY=...` (if required by Region Lovers API)
 - `ENVIRONMENT_MODE=true` or `ENVIRONMENT_MODE=false` (must be boolean-like string)
 - `ENVIRONMENT_MODE_DEV_PASSWORD=...` (needed if `ENVIRONMENT_MODE=true`)

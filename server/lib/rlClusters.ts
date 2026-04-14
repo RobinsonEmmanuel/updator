@@ -11,8 +11,12 @@ export interface RlRegionLite {
   lastSyncedAt?: string
 }
 
-function regionLoversBaseUrl(): string {
-  return (process.env.REGIONLOVERS_API_URL || "https://api-prod.regionlovers.ai").replace(/\/$/, "")
+function regionLoversReadBaseUrl(): string {
+  return (
+    process.env.REGIONLOVERS_API_READ_URL ||
+    process.env.REGIONLOVERS_API_URL ||
+    "https://api-prod.regionlovers.ai"
+  ).replace(/\/$/, "")
 }
 
 function authHeaders(req: Request): HeadersInit {
@@ -71,7 +75,7 @@ function isDeprecatedRegionName(name: string): boolean {
 
 export async function fetchClustersForRegions(req: Request, regionIds: string[]): Promise<RlClusterLite[]> {
   const headers = authHeaders(req)
-  const baseUrl = regionLoversBaseUrl()
+  const baseUrl = regionLoversReadBaseUrl()
 
   const results = await Promise.all(
     regionIds.map(async (regionId) => {
@@ -98,7 +102,7 @@ export async function fetchClustersForRegions(req: Request, regionIds: string[])
 
 export async function fetchRegions(req: Request): Promise<RlRegionLite[]> {
   const headers = authHeaders(req)
-  const baseUrl = regionLoversBaseUrl()
+  const baseUrl = regionLoversReadBaseUrl()
   const res = await fetch(`${baseUrl}/regions`, { headers })
   if (!res.ok) {
     throw new Error(`RL regions error: ${res.status}`)

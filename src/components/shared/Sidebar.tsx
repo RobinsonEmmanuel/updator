@@ -9,7 +9,7 @@ const navItems = [
   { to: "/queue", label: "File de travail", icon: ListTodo },
   { to: "/signaux", label: "Signaux", icon: Bell },
   { to: "/reporting", label: "Reporting", icon: BarChart3 },
-  { to: "/clusters", label: "Clusters", icon: Brain },
+  { to: "/rattrapage-poi", label: "Rattrapage POI", icon: Brain },
 ]
 
 export function Sidebar() {

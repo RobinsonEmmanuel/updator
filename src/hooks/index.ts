@@ -13,3 +13,11 @@ export {
   useUpdateSiteRegions,
   useRegionsOverview,
 } from "./useClusterMappings"
+export {
+  useArticlePoiBacklog,
+  useArticlePoiRecompute,
+  useArticlePoiManualLink,
+  useArticlePoiCreateRl,
+  useSiteCategories,
+} from "./useArticlePoiCatchup"
+export type { PoiAssociationStatus, PoiConfidence } from "./useArticlePoiCatchup"

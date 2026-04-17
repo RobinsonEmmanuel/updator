@@ -7,9 +7,20 @@ export type PoiConfidence = "high" | "medium" | "low"
 export interface PoiSuggestion {
   rl_place_id: string
   name: string
+  place_type: string
+  cluster_id: string
+  cluster_ids: string[]
   score: number
   confidence: PoiConfidence
-  region_id: string
+  reason: string
+  matched_tokens: string[]
+  evidence_excerpt: string
+  score_details: {
+    title_score: number
+    content_score: number
+    token_coverage: number
+    final_score: number
+  }
 }
 
 export interface PoiAssociation {
@@ -36,6 +47,9 @@ export interface ArticlePoiBacklogRow {
   candidateName: string
   suggestions: PoiSuggestion[]
   association: PoiAssociation | null
+  associatedPoiCount: number
+  articleUrl: string | null
+  htmlBrut: string
 }
 
 interface BacklogResponse {
@@ -54,6 +68,8 @@ interface RecomputeResponse {
     regionIds: string[]
     rlPlacesLoaded: number
     articlesScanned: number
+    refreshed: number
+    refreshFailed: number
     updated: number
     autoValidated: number
     needsReview: number
@@ -61,6 +77,14 @@ interface RecomputeResponse {
     skippedFinal: number
     force: boolean
   }
+}
+
+interface RecomputeArticleResponse {
+  success: boolean
+  articleId: string
+  result: "updated-pending" | "updated-needs-review" | "updated-linked" | "skipped-final"
+  rlPlacesLoaded: number
+  refreshed: boolean
 }
 
 interface SiteCategory {
@@ -122,6 +146,26 @@ export function useArticlePoiRecompute(siteId?: string) {
       })
       const data = (await res.json().catch(() => ({}))) as RecomputeResponse & { error?: string }
       if (!res.ok) throw new Error(data.error || "Failed to recompute article-poi matching")
+      return data
+    },
+    onSuccess: () => {
+      if (siteId) queryClient.invalidateQueries({ queryKey: ["article-poi-backlog", siteId] })
+    },
+  })
+}
+
+export function useArticlePoiRecomputeArticle(siteId?: string) {
+  const queryClient = useQueryClient()
+  return useMutation<RecomputeArticleResponse, Error, { articleId: string; force?: boolean }>({
+    mutationFn: async ({ articleId, force = true }) => {
+      if (!siteId) throw new Error("No site selected")
+      const res = await ingestionFetch(ingestionApiUrl(`/api/v1/article-poi/${articleId}/recompute`), {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ siteId, force }),
+      })
+      const data = (await res.json().catch(() => ({}))) as RecomputeArticleResponse & { error?: string }
+      if (!res.ok) throw new Error(data.error || "Failed to recompute article")
       return data
     },
     onSuccess: () => {

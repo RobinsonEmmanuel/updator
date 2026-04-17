@@ -16,8 +16,9 @@ export {
 export {
   useArticlePoiBacklog,
   useArticlePoiRecompute,
+  useArticlePoiRecomputeArticle,
   useArticlePoiManualLink,
   useArticlePoiCreateRl,
   useSiteCategories,
 } from "./useArticlePoiCatchup"
-export type { PoiAssociationStatus, PoiConfidence } from "./useArticlePoiCatchup"
+export type { PoiAssociationStatus, PoiConfidence, ArticlePoiBacklogRow } from "./useArticlePoiCatchup"

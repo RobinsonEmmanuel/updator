@@ -19,6 +19,7 @@ export {
   useArticlePoiRecomputeArticle,
   useArticlePoiManualLink,
   useArticlePoiCreateRl,
+  useArticlePoiRegionPois,
   useSiteCategories,
 } from "./useArticlePoiCatchup"
-export type { PoiAssociationStatus, PoiConfidence, ArticlePoiBacklogRow } from "./useArticlePoiCatchup"
+export type { PoiAssociationStatus, PoiConfidence, ArticlePoiBacklogRow, PoiCandidateGroup, RegionPoiLite } from "./useArticlePoiCatchup"

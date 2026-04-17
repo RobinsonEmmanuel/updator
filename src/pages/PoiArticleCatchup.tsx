@@ -1,14 +1,14 @@
-import { useMemo, useState, type ReactNode } from "react"
+import { useEffect, useMemo, useState } from "react"
 import { Link } from "react-router-dom"
-import { RefreshCw, Settings, Search, Link2, PlusCircle, Sparkles, Loader2, Eye, ExternalLink } from "lucide-react"
+import { RefreshCw, Settings, Search, Link2, Sparkles, Loader2, PanelRight, X, Info } from "lucide-react"
 import { SiteCardsGrid } from "@/components/shared"
 import { useSiteContext } from "@/lib/SiteContext"
 import {
   useArticlePoiBacklog,
-  useArticlePoiCreateRl,
   useArticlePoiManualLink,
   useArticlePoiRecompute,
   useArticlePoiRecomputeArticle,
+  useArticlePoiRegionPois,
   useSiteCategories,
   type PoiAssociationStatus,
   type ArticlePoiBacklogRow,
@@ -49,47 +49,6 @@ function formatLogTime(iso: string): string {
   return Number.isNaN(d.getTime()) ? "—" : d.toLocaleTimeString("fr-FR")
 }
 
-function escapeRegExp(input: string): string {
-  return input.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")
-}
-
-function normalizeTokens(input: string): string[] {
-  return decodeHtmlEntities(input)
-    .replace(/[^\p{L}\p{N}\s-]/gu, " ")
-    .split(/\s+/)
-    .map((t) => t.trim())
-    .filter((t) => t.length >= 3)
-}
-
-function stripHtml(input: string): string {
-  return input
-    .replace(/<script[\s\S]*?<\/script>/gi, " ")
-    .replace(/<style[\s\S]*?<\/style>/gi, " ")
-    .replace(/<[^>]+>/g, " ")
-    .replace(/\s+/g, " ")
-    .trim()
-}
-
-function highlightByTokens(text: string, tokens: string[]): ReactNode {
-  const source = decodeHtmlEntities(text)
-  if (!source || tokens.length === 0) return source
-  const uniq = Array.from(new Set(tokens)).sort((a, b) => b.length - a.length)
-  const pattern = uniq.map((t) => escapeRegExp(t)).join("|")
-  if (!pattern) return source
-  const regex = new RegExp(`(${pattern})`, "gi")
-  const parts = source.split(regex)
-  return parts.map((part, idx) => {
-    const isHit = uniq.some((t) => t.toLowerCase() === part.toLowerCase())
-    return isHit ? (
-      <mark key={`${part}-${idx}`} className="bg-yellow-100 text-stone-900 rounded px-0.5">
-        {part}
-      </mark>
-    ) : (
-      <span key={`${part}-${idx}`}>{part}</span>
-    )
-  })
-}
-
 function NoSitesMessage() {
   return (
     <div className="p-8 max-w-2xl mx-auto">
@@ -116,11 +75,17 @@ export function PoiArticleCatchup() {
   const [status, setStatus] = useState<PoiAssociationStatus | undefined>("needs_review")
   const [category, setCategory] = useState<string>("")
   const [search, setSearch] = useState("")
-  const [manualPlaceId, setManualPlaceId] = useState<Record<string, string>>({})
-  const [manualPlaceName, setManualPlaceName] = useState<Record<string, string>>({})
+  const [linkState, setLinkState] = useState<"all" | "linked" | "unlinked">("all")
+  const [linkPanelRow, setLinkPanelRow] = useState<ArticlePoiBacklogRow | null>(null)
+  const [regionPoiSearch, setRegionPoiSearch] = useState("")
+  const [regionPoiClusterFilter, setRegionPoiClusterFilter] = useState("")
+  const [regionPoiTypeFilter, setRegionPoiTypeFilter] = useState("")
+  const [manualPanelPlaceId, setManualPanelPlaceId] = useState("")
+  const [manualPanelPlaceName, setManualPanelPlaceName] = useState("")
+  const [selectedCandidateId, setSelectedCandidateId] = useState<string | null>(null)
+  const [expandedCandidateInfo, setExpandedCandidateInfo] = useState<Record<string, boolean>>({})
   const [scanModalOpen, setScanModalOpen] = useState(false)
   const [actionLogs, setActionLogs] = useState<ActionLogEntry[]>([])
-  const [inspectRow, setInspectRow] = useState<ArticlePoiBacklogRow | null>(null)
 
   const backlog = useArticlePoiBacklog({
     siteId,
@@ -132,22 +97,88 @@ export function PoiArticleCatchup() {
   const recompute = useArticlePoiRecompute(siteId)
   const recomputeArticle = useArticlePoiRecomputeArticle(siteId)
   const manualLink = useArticlePoiManualLink(siteId)
-  const createRl = useArticlePoiCreateRl(siteId)
   const siteCategories = useSiteCategories(siteId)
+  const regionPois = useArticlePoiRegionPois({ siteId, q: regionPoiSearch, limit: 120 })
 
   const filteredRows = useMemo(() => {
     const rows = backlog.data?.data || []
-    if (!search.trim()) return rows
     const q = search.trim().toLowerCase()
     return rows.filter((row) => {
+      const isLinked = !!(row.hasLinkedPoi ?? row.association?.rl_place_id)
+      if (linkState === "linked" && !isLinked) return false
+      if (linkState === "unlinked" && isLinked) return false
+      if (!q) return true
       return (
         decodeHtmlEntities(row.title).toLowerCase().includes(q) ||
         decodeHtmlEntities(row.candidateName).toLowerCase().includes(q) ||
-        row.suggestions.some((s) => decodeHtmlEntities(s.name).toLowerCase().includes(q)) ||
-        row.candidateGroups.some((g) => decodeHtmlEntities(g.name).toLowerCase().includes(q))
+        (row.rlSuggestions || row.suggestions).some((s) => decodeHtmlEntities(s.name).toLowerCase().includes(q)) ||
+        (row.detectedCandidates || row.candidateGroups).some((g) => decodeHtmlEntities(g.name).toLowerCase().includes(q))
       )
     })
-  }, [backlog.data?.data, search])
+  }, [backlog.data?.data, linkState, search])
+
+  const panelCandidateGroups = useMemo(
+    () => (linkPanelRow?.detectedCandidates || linkPanelRow?.candidateGroups || []),
+    [linkPanelRow]
+  )
+
+  const selectedCandidate = useMemo(
+    () => panelCandidateGroups.find((g) => g.candidate_id === selectedCandidateId) || panelCandidateGroups[0],
+    [panelCandidateGroups, selectedCandidateId]
+  )
+
+  const availableClusterNames = useMemo(
+    () =>
+      Array.from(
+        new Set(
+          (regionPois.data || [])
+            .flatMap((poi) => poi.cluster_names || [])
+            .map((name) => decodeHtmlEntities(name).trim())
+            .filter((name) => name.length > 0)
+        )
+      ).sort((a, b) => a.localeCompare(b)),
+    [regionPois.data]
+  )
+
+  const availableTypeLabels = useMemo(
+    () =>
+      Array.from(
+        new Set(
+          (regionPois.data || []).map((poi) =>
+            decodeHtmlEntities(poi.place_type_label_fr || poi.place_type || "Autre").trim()
+          )
+        )
+      ).sort((a, b) => a.localeCompare(b)),
+    [regionPois.data]
+  )
+
+  const filteredRegionPois = useMemo(() => {
+    const rows = regionPois.data || []
+    const q = regionPoiSearch.trim().toLowerCase()
+    return rows.filter((poi) => {
+      const placeTypeLabel = decodeHtmlEntities(poi.place_type_label_fr || poi.place_type || "").toLowerCase()
+      const clusterNames = (poi.cluster_names || []).map((name) => decodeHtmlEntities(name))
+      if (regionPoiClusterFilter && !clusterNames.includes(regionPoiClusterFilter)) return false
+      if (regionPoiTypeFilter && placeTypeLabel !== regionPoiTypeFilter.toLowerCase()) return false
+      if (!q) return true
+      return (
+        decodeHtmlEntities(poi.name).toLowerCase().includes(q) ||
+        placeTypeLabel.includes(q) ||
+        decodeHtmlEntities(poi.place_type || "").toLowerCase().includes(q) ||
+        clusterNames.some((name) => name.toLowerCase().includes(q)) ||
+        poi.rl_place_id.toLowerCase().includes(q)
+      )
+    })
+  }, [regionPois.data, regionPoiSearch, regionPoiClusterFilter, regionPoiTypeFilter])
+
+  useEffect(() => {
+    if (!linkPanelRow) return
+    const onKeydown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") setLinkPanelRow(null)
+    }
+    window.addEventListener("keydown", onKeydown)
+    return () => window.removeEventListener("keydown", onKeydown)
+  }, [linkPanelRow])
 
   if (hasNoSites) return <NoSitesMessage />
 
@@ -165,7 +196,7 @@ export function PoiArticleCatchup() {
     )
   }
 
-  const mutationPending = recompute.isPending || manualLink.isPending || createRl.isPending || recomputeArticle.isPending
+  const mutationPending = recompute.isPending || manualLink.isPending || recomputeArticle.isPending
 
   const pushLog = (level: ActionLogLevel, message: string) => {
     const entry: ActionLogEntry = {
@@ -175,6 +206,26 @@ export function PoiArticleCatchup() {
       message,
     }
     setActionLogs((prev) => [entry, ...prev].slice(0, 30))
+  }
+
+  const openLinkPanel = (row: ArticlePoiBacklogRow) => {
+    setLinkPanelRow(row)
+    const groups = row.detectedCandidates || row.candidateGroups || []
+    const initialCandidateId =
+      row.association?.candidate_id ||
+      groups[0]?.candidate_id ||
+      null
+    setSelectedCandidateId(initialCandidateId)
+    setManualPanelPlaceId("")
+    setManualPanelPlaceName("")
+    setRegionPoiSearch("")
+    setRegionPoiClusterFilter("")
+    setRegionPoiTypeFilter("")
+    setExpandedCandidateInfo({})
+  }
+
+  const closeLinkPanel = () => {
+    setLinkPanelRow(null)
   }
 
   const handleScanSite = () => {
@@ -192,26 +243,6 @@ export function PoiArticleCatchup() {
         onError: (error) => {
           pushLog("error", `Scan en erreur: ${error.message}`)
         },
-      }
-    )
-  }
-
-  const handleManualLink = (articleId: string, displayTitle: string) => {
-    const rlPlaceId = (manualPlaceId[articleId] || "").trim()
-    const rlPlaceName = (manualPlaceName[articleId] || "").trim()
-    if (!rlPlaceId) return
-    manualLink.mutate(
-      {
-        articleId,
-        rlPlaceId,
-        rlPlaceName: rlPlaceName || undefined,
-        validated: true,
-        confidence: "high",
-        score: 1,
-      },
-      {
-        onSuccess: () => pushLog("success", `Liaison manuelle OK (${displayTitle}) -> ${rlPlaceId}`),
-        onError: (error) => pushLog("error", `Erreur liaison manuelle (${displayTitle}): ${error.message}`),
       }
     )
   }
@@ -246,6 +277,25 @@ export function PoiArticleCatchup() {
         </div>
       )}
 
+      <div className="grid grid-cols-1 md:grid-cols-4 gap-3">
+        <div className="rounded-lg border border-stone-200 bg-white p-3">
+          <div className="text-xs text-stone-500">Articles backlog</div>
+          <div className="text-lg font-semibold text-stone-800">{backlog.data?.total ?? 0}</div>
+        </div>
+        <div className="rounded-lg border border-stone-200 bg-white p-3">
+          <div className="text-xs text-stone-500">Avec POI lié</div>
+          <div className="text-lg font-semibold text-stone-800">{backlog.data?.summary?.withLinkedPoi ?? 0}</div>
+        </div>
+        <div className="rounded-lg border border-stone-200 bg-white p-3">
+          <div className="text-xs text-stone-500">Sans POI lié</div>
+          <div className="text-lg font-semibold text-stone-800">{backlog.data?.summary?.withoutLinkedPoi ?? 0}</div>
+        </div>
+        <div className="rounded-lg border border-stone-200 bg-white p-3">
+          <div className="text-xs text-stone-500">Candidats détectés</div>
+          <div className="text-lg font-semibold text-stone-800">{backlog.data?.summary?.detectedCandidates ?? 0}</div>
+        </div>
+      </div>
+
       <div className="flex flex-wrap gap-2">
         <button
           type="button"
@@ -267,6 +317,30 @@ export function PoiArticleCatchup() {
             {STATUS_LABELS[key]} ({backlog.data?.summary?.[key] || 0})
           </button>
         ))}
+      </div>
+
+      <div className="flex flex-wrap gap-2">
+        <button
+          type="button"
+          onClick={() => setLinkState("all")}
+          className={cn("px-3 py-1.5 text-sm rounded-lg border", linkState === "all" ? "bg-orange-100 border-orange-200 text-orange-800" : "bg-white border-stone-200 text-stone-600")}
+        >
+          Tous
+        </button>
+        <button
+          type="button"
+          onClick={() => setLinkState("linked")}
+          className={cn("px-3 py-1.5 text-sm rounded-lg border", linkState === "linked" ? "bg-orange-100 border-orange-200 text-orange-800" : "bg-white border-stone-200 text-stone-600")}
+        >
+          Avec POI lié
+        </button>
+        <button
+          type="button"
+          onClick={() => setLinkState("unlinked")}
+          className={cn("px-3 py-1.5 text-sm rounded-lg border", linkState === "unlinked" ? "bg-orange-100 border-orange-200 text-orange-800" : "bg-white border-stone-200 text-stone-600")}
+        >
+          Sans POI lié
+        </button>
       </div>
 
       <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
@@ -327,66 +401,78 @@ export function PoiArticleCatchup() {
 
       {backlog.isLoading ? (
         <div className="text-sm text-stone-500">Chargement du backlog…</div>
-      ) : (
+      ) : !linkPanelRow ? (
         <div className="bg-white/80 rounded-xl border border-stone-200 overflow-x-auto">
           <table className="min-w-full text-sm">
             <thead className="bg-stone-50 text-stone-600">
               <tr>
                 <th className="text-left px-4 py-3 font-medium">Article</th>
-                <th className="text-left px-4 py-3 font-medium">Statut</th>
                 <th className="text-left px-4 py-3 font-medium">POI associé(s)</th>
-                <th className="text-left px-4 py-3 font-medium">Suggestion RL</th>
+                <th className="text-left px-4 py-3 font-medium">POI RL proposés</th>
                 <th className="text-left px-4 py-3 font-medium">Actions</th>
               </tr>
             </thead>
             <tbody>
               {filteredRows.map((row) => {
-                const topSuggestion = row.suggestions[0]
-                const regionId = selectedSite.regionIds?.[0]
+                const candidates = row.detectedCandidates || row.candidateGroups || []
+                const previewSuggestions = Array.from(
+                  new Map(
+                    candidates
+                      .flatMap((group) => (group.suggestions || []).slice(0, 2))
+                      .sort((a, b) => b.score - a.score)
+                      .map((s) => [s.rl_place_id, s])
+                  ).values()
+                ).slice(0, 4)
                 const displayTitle = decodeHtmlEntities(row.title)
                 const displayCandidate = decodeHtmlEntities(row.candidateName || "—")
-                const displaySuggestionName = topSuggestion ? decodeHtmlEntities(topSuggestion.name) : null
-                const candidateCount = row.candidateGroups?.length || (row.candidateName ? 1 : 0)
+                const candidateCount = row.detectedCandidatesCount ?? candidates.length ?? (row.candidateName ? 1 : 0)
+                const unmatchedCount = row.unmatchedCandidatesCount ?? candidates.filter((g) => (g.suggestions || []).length === 0).length
                 return (
                   <tr key={row.articleId} className="border-t border-stone-100 align-top">
                     <td className="px-4 py-3 min-w-[340px]">
                       <div className="font-medium text-stone-800">{displayTitle}</div>
                       <div className="text-xs text-stone-500 mt-1">{row.categories.join(" · ") || "Sans catégorie"}</div>
-                      <div className="text-xs text-stone-500 mt-1">Candidat: {displayCandidate}</div>
-                      <div className="text-xs text-stone-500 mt-1">Candidats détectés: {candidateCount}</div>
-                    </td>
-                    <td className="px-4 py-3">
-                      <span className="inline-flex text-xs px-2 py-1 rounded-full bg-stone-100 text-stone-700">
-                        {STATUS_LABELS[row.status]}
-                      </span>
+                      <div className="text-xs text-stone-500 mt-1">Candidat principal: {displayCandidate}</div>
+                      <div className="text-xs text-stone-500 mt-1">
+                        Candidats détectés: {candidateCount} · Candidats sans suggestion RL: {unmatchedCount}
+                      </div>
                     </td>
                     <td className="px-4 py-3 min-w-[220px]">
-                      <div className="font-medium text-stone-800">{row.associatedPoiCount}</div>
+                      <div className="font-medium text-stone-800">{row.linkedPoiCount ?? row.associatedPoiCount}</div>
                       <div className="text-xs text-stone-500 mt-1">
                         {row.association?.rl_place_name || row.association?.rl_place_id || "Aucun lien RL"}
                       </div>
                     </td>
-                    <td className="px-4 py-3 min-w-[250px]">
-                      {topSuggestion ? (
-                        <div>
-                          <div className="font-medium text-stone-800">{displaySuggestionName}</div>
-                          <div className="text-xs text-stone-500 mt-1">
-                            ID: <span className="font-mono">{topSuggestion.rl_place_id}</span>
-                          </div>
-                          <div className="text-xs text-stone-500 mt-0.5">
-                            Type: <span className="font-medium">{topSuggestion.place_type}</span>
-                          </div>
-                          <div className="text-xs text-stone-500 mt-0.5">
-                            Cluster: <span className="font-mono">{topSuggestion.cluster_id || "—"}</span>
-                          </div>
-                          <div className="text-xs text-stone-500 mt-0.5">{Math.round(topSuggestion.score * 100)}% · {topSuggestion.confidence}</div>
-                          <div className="text-xs text-stone-600 mt-1">{topSuggestion.reason}</div>
+                    <td className="px-4 py-3 min-w-[360px]">
+                      {previewSuggestions.length > 0 ? (
+                        <div className="flex flex-wrap gap-1.5">
+                          {previewSuggestions.map((s) => {
+                            const isOfficiallyLinked =
+                              !!row.association?.rl_place_id &&
+                              row.association.rl_place_id === s.rl_place_id &&
+                              (row.status === "linked" || row.status === "created" || row.association?.validated === true)
+                            return (
+                              <span
+                                key={s.rl_place_id}
+                                className={cn(
+                                  "inline-flex items-center gap-1 rounded-full px-2 py-1 text-xs border",
+                                  isOfficiallyLinked
+                                    ? "bg-orange-100 border-orange-200 text-orange-800"
+                                    : "bg-stone-100 border-stone-200 text-stone-700"
+                                )}
+                                title={`${decodeHtmlEntities(s.name)} (${Math.round(s.score * 100)}%)`}
+                              >
+                                <span className="max-w-[180px] truncate">{decodeHtmlEntities(s.name)}</span>
+                                <span className="font-medium">{Math.round(s.score * 100)}%</span>
+                              </span>
+                            )
+                          })}
                         </div>
                       ) : (
-                        <span className="text-xs text-stone-500">Pas de suggestion fiable</span>
+                        <span className="text-xs text-stone-500">Aucun POI RL proposé</span>
                       )}
                     </td>
-                    <td className="px-4 py-3 min-w-[460px]">
+                    <td className="px-4 py-3 min-w-[150px]">
                       <div className="flex flex-wrap gap-2">
                         <button
                           type="button"
@@ -408,96 +494,19 @@ export function PoiArticleCatchup() {
                             )
                           }}
                           disabled={mutationPending}
-                          className="inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg text-xs border border-stone-200 text-stone-700 bg-white hover:bg-stone-50 disabled:opacity-60"
+                          className="inline-flex items-center justify-center h-8 w-8 rounded-lg text-xs border border-stone-200 text-stone-700 bg-white hover:bg-stone-50 disabled:opacity-60"
+                          title="Relancer l'article"
                         >
                           <RefreshCw className="h-3.5 w-3.5" />
-                          Relancer l'article
-                        </button>
-                        {topSuggestion && (
-                          <button
-                            type="button"
-                            disabled={mutationPending}
-                            onClick={() =>
-                              manualLink.mutate({
-                                articleId: row.articleId,
-                                rlPlaceId: topSuggestion.rl_place_id,
-                                rlPlaceName: displaySuggestionName || topSuggestion.name,
-                                confidence: topSuggestion.confidence,
-                                score: topSuggestion.score,
-                                validated: true,
-                              }, {
-                                onSuccess: () => pushLog("success", `POI lié (${displayTitle}) -> ${displaySuggestionName || topSuggestion.name}`),
-                                onError: (error) => pushLog("error", `Erreur liaison suggestion (${displayTitle}): ${error.message}`),
-                              })
-                            }
-                            className="inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg text-xs bg-orange-500 text-white hover:bg-orange-600 disabled:opacity-60"
-                          >
-                            <Link2 className="h-3.5 w-3.5" />
-                            Lier suggestion
-                          </button>
-                        )}
-                        <button
-                          type="button"
-                          disabled={mutationPending || !regionId}
-                          onClick={() =>
-                            createRl.mutate({
-                              articleId: row.articleId,
-                              regionId,
-                              name: decodeHtmlEntities(row.candidateName || row.title),
-                            }, {
-                              onSuccess: () => pushLog("success", `POI créé dans RL et lié (${displayTitle})`),
-                              onError: (error) => pushLog("error", `Erreur création RL (${displayTitle}): ${error.message}`),
-                            })
-                          }
-                          className="inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg text-xs border border-stone-200 text-stone-700 bg-white hover:bg-stone-50 disabled:opacity-60"
-                        >
-                          <PlusCircle className="h-3.5 w-3.5" />
-                          Créer dans RL
                         </button>
                         <button
                           type="button"
                           disabled={mutationPending}
-                          onClick={() => setInspectRow(row)}
-                          className="inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg text-xs border border-stone-200 text-stone-700 bg-white hover:bg-stone-50 disabled:opacity-60"
+                          onClick={() => openLinkPanel(row)}
+                          className="inline-flex items-center justify-center h-8 w-8 rounded-lg text-xs border border-orange-200 text-orange-700 bg-orange-50 hover:bg-orange-100 disabled:opacity-60"
+                          title="Ouvrir espace liaison"
                         >
-                          <Eye className="h-3.5 w-3.5" />
-                          Vérifier
-                        </button>
-                      </div>
-                      <div className="mt-2 flex items-center gap-2">
-                        <input
-                          value={manualPlaceId[row.articleId] || ""}
-                          onChange={(e) =>
-                            setManualPlaceId((prev) => ({
-                              ...prev,
-                              [row.articleId]: e.target.value,
-                            }))
-                          }
-                          placeholder="rl_place_id"
-                          className="w-[140px] px-2 py-1 rounded border border-stone-200 text-xs"
-                        />
-                        <input
-                          value={manualPlaceName[row.articleId] || ""}
-                          onChange={(e) =>
-                            setManualPlaceName((prev) => ({
-                              ...prev,
-                              [row.articleId]: e.target.value,
-                            }))
-                          }
-                          placeholder="Nom (optionnel)"
-                          className="w-[160px] px-2 py-1 rounded border border-stone-200 text-xs"
-                        />
-                        <button
-                          type="button"
-                          disabled={mutationPending || !(manualPlaceId[row.articleId] || "").trim()}
-                          onClick={() => {
-                            pushLog("info", `Liaison manuelle par rl_place_id (${displayTitle})`)
-                            handleManualLink(row.articleId, displayTitle)
-                          }}
-                          className="inline-flex items-center gap-1 px-2 py-1 rounded text-xs border border-stone-200 bg-white text-stone-700 hover:bg-stone-50 disabled:opacity-60"
-                        >
-                          <Link2 className="h-3.5 w-3.5" />
-                          Lier ID RL
+                          <PanelRight className="h-3.5 w-3.5" />
                         </button>
                       </div>
                     </td>
@@ -509,6 +518,244 @@ export function PoiArticleCatchup() {
           {filteredRows.length === 0 && (
             <div className="p-8 text-center text-sm text-stone-500">Aucun article avec ces filtres.</div>
           )}
+        </div>
+      ) : null}
+
+      {linkPanelRow && (
+        <div className="rounded-xl border border-stone-200 bg-white shadow-sm overflow-hidden">
+          <div className="sticky top-0 z-10 px-5 py-4 border-b border-stone-200 bg-white flex items-start justify-between gap-3">
+              <div>
+                <h3 className="text-base font-semibold text-stone-800">Espace de liaison POI</h3>
+                <p className="text-xs text-stone-500 mt-1">{decodeHtmlEntities(linkPanelRow.title)}</p>
+              </div>
+              <button
+                type="button"
+                onClick={closeLinkPanel}
+                className="p-1.5 rounded border border-stone-200 text-stone-600 hover:bg-stone-50"
+                aria-label="Fermer le panneau"
+              >
+                <X className="h-4 w-4" />
+              </button>
+          </div>
+
+          <div className="p-5">
+              <div className="grid grid-cols-1 xl:grid-cols-12 gap-4">
+                <div className="xl:col-span-7 space-y-4">
+                  <div className="rounded-lg border border-stone-200 bg-stone-50 p-3">
+                    <div className="text-xs text-stone-500">Candidat sélectionné</div>
+                    <div className="text-sm text-stone-800 mt-1">{selectedCandidate ? decodeHtmlEntities(selectedCandidate.name) : "Aucun candidat détecté"}</div>
+                    {selectedCandidate && (
+                      <div className="text-xs text-stone-500 mt-1">
+                        Score candidat: {Math.round((selectedCandidate.mention_score || 0) * 100)}%
+                      </div>
+                    )}
+                  </div>
+
+                  <div className="space-y-2">
+                    <div className="text-xs text-stone-500">Candidats détectés</div>
+                    <div className="space-y-2 max-h-56 overflow-y-auto">
+                      {panelCandidateGroups.map((group) => {
+                        const active = selectedCandidate?.candidate_id === group.candidate_id
+                        const expanded = !!expandedCandidateInfo[group.candidate_id]
+                        return (
+                          <div
+                            key={group.candidate_id}
+                            className={cn(
+                              "w-full rounded-lg border p-2",
+                              active ? "border-orange-300 bg-orange-50" : "border-stone-200 bg-white"
+                            )}
+                          >
+                            <div className="flex items-center justify-between gap-2">
+                              <button
+                                type="button"
+                                onClick={() => setSelectedCandidateId(group.candidate_id)}
+                                className="text-left min-w-0 flex-1"
+                              >
+                                <div className="text-sm text-stone-800 truncate">{decodeHtmlEntities(group.name)}</div>
+                                <div className="text-xs text-stone-500 mt-0.5">
+                                  Score {Math.round((group.mention_score || 0) * 100)}%
+                                </div>
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() =>
+                                  setExpandedCandidateInfo((prev) => ({
+                                    ...prev,
+                                    [group.candidate_id]: !expanded,
+                                  }))
+                                }
+                                className="inline-flex items-center gap-1 text-xs px-2 py-1 rounded border border-stone-200 text-stone-600 hover:bg-stone-50"
+                              >
+                                <Info className="h-3.5 w-3.5" />
+                                Infos
+                              </button>
+                            </div>
+                            {expanded && (
+                              <div className="mt-2 text-xs text-stone-600 space-y-1">
+                                <div><strong>Source:</strong> {group.source}</div>
+                                <div><strong>Occurrences (freq):</strong> {group.frequency}</div>
+                                <div><strong>Hits titres (h):</strong> {group.heading_hits} sur H1/H2/H3</div>
+                                <div><strong>Suggestions RL (sugg):</strong> {group.suggestions.length}</div>
+                              </div>
+                            )}
+                          </div>
+                        )
+                      })}
+                    </div>
+                  </div>
+
+                  <div className="space-y-2">
+                    <div className="text-xs text-stone-500">Suggestions RL vérifiables ({selectedCandidate?.suggestions?.length || 0})</div>
+                    {selectedCandidate?.suggestions?.length ? (
+                      <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
+                        {selectedCandidate.suggestions.slice(0, 8).map((s) => (
+                          <div key={s.rl_place_id} className="rounded-lg border border-stone-200 bg-white p-2">
+                            <div className="text-sm font-medium text-stone-800 truncate">{decodeHtmlEntities(s.name)}</div>
+                            <div className="text-xs text-stone-500 mt-0.5">
+                              {decodeHtmlEntities(s.place_type_label_fr || s.place_type)}
+                            </div>
+                            <div className="text-xs text-stone-500 mt-0.5">
+                              Score: {Math.round(s.score * 100)}% · ID: <span className="font-mono">{s.rl_place_id}</span>
+                            </div>
+                            <div className="text-xs text-stone-500 mt-0.5">
+                              Cluster: {decodeHtmlEntities(s.cluster_name || s.cluster_id || "—")}
+                            </div>
+                            <button
+                              type="button"
+                              disabled={mutationPending}
+                              onClick={() =>
+                                manualLink.mutate(
+                                  {
+                                    articleId: linkPanelRow.articleId,
+                                    rlPlaceId: s.rl_place_id,
+                                    rlPlaceName: s.name,
+                                    candidateId: selectedCandidate?.candidate_id,
+                                    confidence: s.confidence,
+                                    score: s.score,
+                                    validated: true,
+                                  },
+                                  {
+                                    onSuccess: () => pushLog("success", `POI lié (${decodeHtmlEntities(linkPanelRow.title)}) -> ${decodeHtmlEntities(s.name)}`),
+                                    onError: (error) => pushLog("error", `Erreur liaison suggestion (${decodeHtmlEntities(linkPanelRow.title)}): ${error.message}`),
+                                  }
+                                )
+                              }
+                              className="mt-2 inline-flex items-center gap-1.5 px-2 py-1.5 rounded text-xs bg-orange-500 text-white hover:bg-orange-600 disabled:opacity-60"
+                            >
+                              <Link2 className="h-3.5 w-3.5" />
+                              Lier ce POI
+                            </button>
+                          </div>
+                        ))}
+                      </div>
+                    ) : (
+                      <div className="text-xs text-stone-500 rounded-lg border border-stone-200 bg-stone-50 p-2">
+                        Aucune suggestion RL disponible pour ce candidat.
+                      </div>
+                    )}
+                  </div>
+                </div>
+
+                <div className="xl:col-span-5 space-y-4">
+                  <div className="space-y-2">
+                    <div className="text-xs text-stone-500">Moteur POI région (filtres)</div>
+                    <input
+                      value={regionPoiSearch}
+                      onChange={(e) => setRegionPoiSearch(e.target.value)}
+                      placeholder="Recherche nom, ID, cluster, type"
+                      className="w-full px-3 py-2 rounded-lg border border-stone-200 text-sm"
+                    />
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
+                      <select
+                        value={regionPoiClusterFilter}
+                        onChange={(e) => setRegionPoiClusterFilter(e.target.value)}
+                        className="w-full px-3 py-2 rounded-lg border border-stone-200 text-sm bg-white"
+                      >
+                        <option value="">Tous les clusters</option>
+                        {availableClusterNames.map((name) => (
+                          <option key={name} value={name}>{name}</option>
+                        ))}
+                      </select>
+                      <select
+                        value={regionPoiTypeFilter}
+                        onChange={(e) => setRegionPoiTypeFilter(e.target.value)}
+                        className="w-full px-3 py-2 rounded-lg border border-stone-200 text-sm bg-white"
+                      >
+                        <option value="">Toutes les catégories</option>
+                        {availableTypeLabels.map((label) => (
+                          <option key={label} value={label}>{label}</option>
+                        ))}
+                      </select>
+                    </div>
+                    <div className="max-h-60 overflow-y-auto space-y-1 rounded-lg border border-stone-200 bg-white p-2">
+                      {filteredRegionPois.map((poi) => (
+                        <button
+                          key={poi.rl_place_id}
+                          type="button"
+                          onClick={() => {
+                            setManualPanelPlaceId(poi.rl_place_id)
+                            setManualPanelPlaceName(poi.name)
+                          }}
+                          className="w-full text-left rounded border border-stone-100 px-2 py-1.5 hover:bg-stone-50"
+                        >
+                          <div className="text-xs text-stone-800">{decodeHtmlEntities(poi.name)}</div>
+                          <div className="text-[11px] text-stone-500">
+                            {decodeHtmlEntities(poi.place_type_label_fr || poi.place_type)} · {(poi.cluster_names || [])[0] || "Cluster inconnu"}
+                          </div>
+                          <div className="text-[11px] text-stone-500 font-mono">{poi.rl_place_id}</div>
+                        </button>
+                      ))}
+                      {!regionPois.isLoading && filteredRegionPois.length === 0 && (
+                        <div className="text-xs text-stone-500 p-1">Aucun POI trouvé avec ces filtres.</div>
+                      )}
+                    </div>
+                  </div>
+
+                  <div className="space-y-2">
+                    <div className="text-xs text-stone-500">Liaison manuelle via ID RL</div>
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
+                      <input
+                        value={manualPanelPlaceId}
+                        onChange={(e) => setManualPanelPlaceId(e.target.value)}
+                        placeholder="rl_place_id"
+                        className="px-3 py-2 rounded-lg border border-stone-200 text-sm"
+                      />
+                      <input
+                        value={manualPanelPlaceName}
+                        onChange={(e) => setManualPanelPlaceName(e.target.value)}
+                        placeholder="Nom (optionnel)"
+                        className="px-3 py-2 rounded-lg border border-stone-200 text-sm"
+                      />
+                    </div>
+                    <button
+                      type="button"
+                      disabled={mutationPending || !manualPanelPlaceId.trim()}
+                      onClick={() =>
+                        manualLink.mutate(
+                          {
+                            articleId: linkPanelRow.articleId,
+                            rlPlaceId: manualPanelPlaceId.trim(),
+                            rlPlaceName: manualPanelPlaceName.trim() || undefined,
+                            candidateId: selectedCandidate?.candidate_id || undefined,
+                            confidence: "high",
+                            score: 1,
+                            validated: true,
+                          },
+                          {
+                            onSuccess: () => pushLog("success", `Liaison manuelle OK (${decodeHtmlEntities(linkPanelRow.title)}) -> ${manualPanelPlaceId.trim()}`),
+                            onError: (error) => pushLog("error", `Erreur liaison manuelle (${decodeHtmlEntities(linkPanelRow.title)}): ${error.message}`),
+                          }
+                        )
+                      }
+                      className="inline-flex items-center gap-1.5 px-3 py-2 rounded-lg text-xs border border-stone-200 bg-white text-stone-700 hover:bg-stone-50 disabled:opacity-60"
+                    >
+                      <Link2 className="h-3.5 w-3.5" />
+                      Lier ID RL
+                    </button>
+                  </div>
+                </div>
+              </div>
+          </div>
         </div>
       )}
 
@@ -572,142 +819,6 @@ export function PoiArticleCatchup() {
         </div>
       )}
 
-      {inspectRow && (
-        <div className="fixed inset-0 bg-black/50 flex items-start justify-center z-50 p-4 overflow-y-auto">
-          <div className="bg-white rounded-xl w-full max-w-2xl shadow-xl border border-stone-200 max-h-[90vh] overflow-hidden flex flex-col">
-            <div className="sticky top-0 z-10 bg-white border-b border-stone-200 px-6 py-4 flex items-start justify-between gap-4">
-              <div>
-                <h3 className="text-lg font-semibold text-stone-800">Vérification du matching POI</h3>
-                <p className="text-sm text-stone-500 mt-1">{selectedSite.name}</p>
-              </div>
-              <button
-                type="button"
-                onClick={() => setInspectRow(null)}
-                className="px-2.5 py-1.5 rounded-lg text-xs border border-stone-200 text-stone-700 hover:bg-stone-50"
-              >
-                Fermer
-              </button>
-            </div>
-            <div className="px-6 py-4 overflow-y-auto">
-
-            {(() => {
-              const row = inspectRow
-              const sourceText = stripHtml(row.htmlBrut || "")
-              const groups = row.candidateGroups?.length
-                ? row.candidateGroups
-                : [{
-                    candidate_id: row.articleId,
-                    name: row.candidateName,
-                    source: "fallback" as const,
-                    section_title: "",
-                    frequency: 1,
-                    heading_hits: 0,
-                    mention_score: row.suggestions[0]?.score ?? 0,
-                    evidence_excerpt: row.suggestions[0]?.evidence_excerpt ?? "",
-                    suggestions: row.suggestions ?? [],
-                  }]
-              const globalTokens = normalizeTokens(
-                groups
-                  .flatMap((g) => [g.name, ...g.suggestions.flatMap((s) => [s.name, ...(s.matched_tokens || [])])])
-                  .join(" ")
-              )
-              const articleUrl = row.articleUrl || (row.slug && selectedSite.url
-                ? `${selectedSite.url.replace(/\/$/, "")}/${row.slug.replace(/^\/+|\/+$/g, "")}/`
-                : null)
-
-              return (
-                <div className="space-y-4">
-                  <div className="rounded-lg border border-stone-200 bg-stone-50 p-3">
-                    <div className="text-xs text-stone-500 mb-1">Source utilisée actuellement pour le matching</div>
-                    <div className="text-sm text-stone-700">Contenu HTML WordPress (refresh complet) + titre/candidat</div>
-                  </div>
-
-                  <div className="space-y-1">
-                    <div className="text-xs text-stone-500">Titre article</div>
-                    <div className="text-sm text-stone-900 leading-relaxed">{highlightByTokens(decodeHtmlEntities(row.title), globalTokens)}</div>
-                  </div>
-
-                  <div className="space-y-3">
-                    <div className="text-xs text-stone-500">Candidats POI détectés ({groups.length})</div>
-                    {groups.map((group) => {
-                      const top = group.suggestions?.[0]
-                      const candidateTokens = normalizeTokens(
-                        `${group.name} ${top?.name || ""} ${(top?.matched_tokens || []).join(" ")}`
-                      )
-                      return (
-                        <div key={group.candidate_id} className="rounded-lg border border-stone-200 bg-white p-3 space-y-2">
-                          <div className="text-sm font-medium text-stone-800">
-                            {highlightByTokens(decodeHtmlEntities(group.name || "—"), candidateTokens)}
-                          </div>
-                          <div className="text-xs text-stone-500">
-                            source={group.source} · section={decodeHtmlEntities(group.section_title || "—")} · fréquence={group.frequency} · h-hits={group.heading_hits} · mention={Math.round((group.mention_score || 0) * 100)}%
-                          </div>
-                          {top ? (
-                            <div className="text-xs text-stone-700 space-y-1">
-                              <div>
-                                Suggestion: <span className="font-medium">{highlightByTokens(decodeHtmlEntities(top.name), candidateTokens)}</span>
-                              </div>
-                              <div>
-                                ID: <span className="font-mono">{top.rl_place_id}</span> · Type: {top.place_type || "autre"} · Cluster: <span className="font-mono">{top.cluster_id || "—"}</span> · {Math.round(top.score * 100)}% ({top.confidence})
-                              </div>
-                              <div><strong>Pourquoi:</strong> {top.reason}</div>
-                              <div><strong>Tokens:</strong> {top.matched_tokens?.join(", ") || "aucun"}</div>
-                              <div>
-                                <strong>Détail score:</strong> titre={top.score_details?.title_score ?? 0} · contenu={top.score_details?.content_score ?? 0} · couverture={top.score_details?.token_coverage ?? 0} · final={top.score_details?.final_score ?? top.score}
-                              </div>
-                              {(top.evidence_excerpt || group.evidence_excerpt) ? (
-                                <div className="rounded border border-stone-200 bg-stone-50 p-2 text-xs text-stone-700 leading-relaxed">
-                                  {highlightByTokens(top.evidence_excerpt || group.evidence_excerpt, candidateTokens)}
-                                </div>
-                              ) : null}
-                            </div>
-                          ) : (
-                            <div className="text-xs text-stone-500">Aucune suggestion RL fiable pour ce candidat.</div>
-                          )}
-                        </div>
-                      )
-                    })}
-                  </div>
-
-                  <div className="space-y-1">
-                    <div className="text-xs text-stone-500">Texte intégral extrait de html_brut (matching)</div>
-                    <div className="text-sm text-stone-900 leading-relaxed max-h-48 overflow-auto rounded-lg border border-stone-200 bg-white p-3">
-                      {sourceText
-                        ? highlightByTokens(sourceText, globalTokens)
-                        : <span className="text-stone-500">Aucun contenu disponible (html_brut vide).</span>}
-                    </div>
-                  </div>
-
-                  <div className="space-y-1">
-                    <div className="text-xs text-stone-500">html_brut complet (rendu)</div>
-                    <div
-                      className="max-h-72 overflow-auto rounded-lg border border-stone-200 bg-white p-3 prose prose-sm max-w-none"
-                      dangerouslySetInnerHTML={{ __html: row.htmlBrut || "<p>Aucun html_brut</p>" }}
-                    />
-                  </div>
-
-                  <div className="flex items-center gap-2 pt-2">
-                    {articleUrl ? (
-                      <a
-                        href={articleUrl}
-                        target="_blank"
-                        rel="noreferrer"
-                        className="inline-flex items-center gap-1.5 px-3 py-2 rounded-lg text-xs border border-stone-200 text-stone-700 hover:bg-stone-50"
-                      >
-                        <ExternalLink className="h-3.5 w-3.5" />
-                        Ouvrir l’article
-                      </a>
-                    ) : (
-                      <span className="text-xs text-stone-500">Lien article indisponible (slug absent)</span>
-                    )}
-                  </div>
-                </div>
-              )
-            })()}
-            </div>
-          </div>
-        </div>
-      )}
     </div>
   )
 }

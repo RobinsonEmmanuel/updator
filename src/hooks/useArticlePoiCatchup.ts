@@ -23,6 +23,18 @@ export interface PoiSuggestion {
   }
 }
 
+export interface PoiCandidateGroup {
+  candidate_id: string
+  name: string
+  source: "h1" | "h2" | "h3" | "title" | "body" | "fallback"
+  section_title: string
+  frequency: number
+  heading_hits: number
+  mention_score: number
+  evidence_excerpt: string
+  suggestions: PoiSuggestion[]
+}
+
 export interface PoiAssociation {
   status?: PoiAssociationStatus
   rl_place_id?: string
@@ -46,6 +58,7 @@ export interface ArticlePoiBacklogRow {
   status: PoiAssociationStatus
   candidateName: string
   suggestions: PoiSuggestion[]
+  candidateGroups: PoiCandidateGroup[]
   association: PoiAssociation | null
   associatedPoiCount: number
   articleUrl: string | null

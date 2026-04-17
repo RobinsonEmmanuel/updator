@@ -143,7 +143,8 @@ export function PoiArticleCatchup() {
       return (
         decodeHtmlEntities(row.title).toLowerCase().includes(q) ||
         decodeHtmlEntities(row.candidateName).toLowerCase().includes(q) ||
-        row.suggestions.some((s) => decodeHtmlEntities(s.name).toLowerCase().includes(q))
+        row.suggestions.some((s) => decodeHtmlEntities(s.name).toLowerCase().includes(q)) ||
+        row.candidateGroups.some((g) => decodeHtmlEntities(g.name).toLowerCase().includes(q))
       )
     })
   }, [backlog.data?.data, search])
@@ -345,12 +346,14 @@ export function PoiArticleCatchup() {
                 const displayTitle = decodeHtmlEntities(row.title)
                 const displayCandidate = decodeHtmlEntities(row.candidateName || "—")
                 const displaySuggestionName = topSuggestion ? decodeHtmlEntities(topSuggestion.name) : null
+                const candidateCount = row.candidateGroups?.length || (row.candidateName ? 1 : 0)
                 return (
                   <tr key={row.articleId} className="border-t border-stone-100 align-top">
                     <td className="px-4 py-3 min-w-[340px]">
                       <div className="font-medium text-stone-800">{displayTitle}</div>
                       <div className="text-xs text-stone-500 mt-1">{row.categories.join(" · ") || "Sans catégorie"}</div>
                       <div className="text-xs text-stone-500 mt-1">Candidat: {displayCandidate}</div>
+                      <div className="text-xs text-stone-500 mt-1">Candidats détectés: {candidateCount}</div>
                     </td>
                     <td className="px-4 py-3">
                       <span className="inline-flex text-xs px-2 py-1 rounded-full bg-stone-100 text-stone-700">
@@ -589,13 +592,25 @@ export function PoiArticleCatchup() {
 
             {(() => {
               const row = inspectRow
-              const topSuggestion = row.suggestions[0]
-              const articleTitle = decodeHtmlEntities(row.title)
-              const candidateName = decodeHtmlEntities(row.candidateName || "")
-              const suggestionName = topSuggestion ? decodeHtmlEntities(topSuggestion.name) : ""
               const sourceText = stripHtml(row.htmlBrut || "")
-              const annotationTokens = topSuggestion?.matched_tokens?.join(" ") || ""
-              const highlightTokens = normalizeTokens(`${candidateName} ${suggestionName} ${annotationTokens}`)
+              const groups = row.candidateGroups?.length
+                ? row.candidateGroups
+                : [{
+                    candidate_id: row.articleId,
+                    name: row.candidateName,
+                    source: "fallback" as const,
+                    section_title: "",
+                    frequency: 1,
+                    heading_hits: 0,
+                    mention_score: row.suggestions[0]?.score ?? 0,
+                    evidence_excerpt: row.suggestions[0]?.evidence_excerpt ?? "",
+                    suggestions: row.suggestions ?? [],
+                  }]
+              const globalTokens = normalizeTokens(
+                groups
+                  .flatMap((g) => [g.name, ...g.suggestions.flatMap((s) => [s.name, ...(s.matched_tokens || [])])])
+                  .join(" ")
+              )
               const articleUrl = row.articleUrl || (row.slug && selectedSite.url
                 ? `${selectedSite.url.replace(/\/$/, "")}/${row.slug.replace(/^\/+|\/+$/g, "")}/`
                 : null)
@@ -609,52 +624,56 @@ export function PoiArticleCatchup() {
 
                   <div className="space-y-1">
                     <div className="text-xs text-stone-500">Titre article</div>
-                    <div className="text-sm text-stone-900 leading-relaxed">{highlightByTokens(articleTitle, highlightTokens)}</div>
+                    <div className="text-sm text-stone-900 leading-relaxed">{highlightByTokens(decodeHtmlEntities(row.title), globalTokens)}</div>
                   </div>
 
-                  <div className="space-y-1">
-                    <div className="text-xs text-stone-500">Candidat détecté</div>
-                    <div className="text-sm text-stone-900 leading-relaxed">{highlightByTokens(candidateName || "—", highlightTokens)}</div>
-                  </div>
-
-                  <div className="space-y-1">
-                    <div className="text-xs text-stone-500">Suggestion RL</div>
-                    {topSuggestion ? (
-                      <div className="text-sm text-stone-900 space-y-1">
-                        <div className="font-medium">{highlightByTokens(suggestionName, highlightTokens)}</div>
-                        <div className="text-xs text-stone-500 mt-1">
-                          ID: <span className="font-mono">{topSuggestion.rl_place_id}</span> · Type:{" "}
-                          <span className="font-medium">{topSuggestion.place_type || "autre"}</span> · Cluster:{" "}
-                          <span className="font-mono">{topSuggestion.cluster_id || "—"}</span> · {Math.round(topSuggestion.score * 100)}% (
-                          {topSuggestion.confidence})
-                        </div>
-                        <div className="text-xs text-stone-700">
-                          <strong>Pourquoi:</strong> {topSuggestion.reason}
-                        </div>
-                        <div className="text-xs text-stone-600">
-                          <strong>Tokens trouvés:</strong> {topSuggestion.matched_tokens?.join(", ") || "aucun"}
-                        </div>
-                        <div className="text-xs text-stone-600">
-                          <strong>Détail score:</strong>{" "}
-                          titre={topSuggestion.score_details?.title_score ?? 0} · contenu={topSuggestion.score_details?.content_score ?? 0} ·
-                          couverture={topSuggestion.score_details?.token_coverage ?? 0} · final={topSuggestion.score_details?.final_score ?? topSuggestion.score}
-                        </div>
-                        {topSuggestion.evidence_excerpt ? (
-                          <div className="rounded border border-stone-200 bg-stone-50 p-2 text-xs text-stone-700 leading-relaxed">
-                            {highlightByTokens(topSuggestion.evidence_excerpt, highlightTokens)}
+                  <div className="space-y-3">
+                    <div className="text-xs text-stone-500">Candidats POI détectés ({groups.length})</div>
+                    {groups.map((group) => {
+                      const top = group.suggestions?.[0]
+                      const candidateTokens = normalizeTokens(
+                        `${group.name} ${top?.name || ""} ${(top?.matched_tokens || []).join(" ")}`
+                      )
+                      return (
+                        <div key={group.candidate_id} className="rounded-lg border border-stone-200 bg-white p-3 space-y-2">
+                          <div className="text-sm font-medium text-stone-800">
+                            {highlightByTokens(decodeHtmlEntities(group.name || "—"), candidateTokens)}
                           </div>
-                        ) : null}
-                      </div>
-                    ) : (
-                      <div className="text-sm text-stone-500">Aucune suggestion fiable pour cet article.</div>
-                    )}
+                          <div className="text-xs text-stone-500">
+                            source={group.source} · section={decodeHtmlEntities(group.section_title || "—")} · fréquence={group.frequency} · h-hits={group.heading_hits} · mention={Math.round((group.mention_score || 0) * 100)}%
+                          </div>
+                          {top ? (
+                            <div className="text-xs text-stone-700 space-y-1">
+                              <div>
+                                Suggestion: <span className="font-medium">{highlightByTokens(decodeHtmlEntities(top.name), candidateTokens)}</span>
+                              </div>
+                              <div>
+                                ID: <span className="font-mono">{top.rl_place_id}</span> · Type: {top.place_type || "autre"} · Cluster: <span className="font-mono">{top.cluster_id || "—"}</span> · {Math.round(top.score * 100)}% ({top.confidence})
+                              </div>
+                              <div><strong>Pourquoi:</strong> {top.reason}</div>
+                              <div><strong>Tokens:</strong> {top.matched_tokens?.join(", ") || "aucun"}</div>
+                              <div>
+                                <strong>Détail score:</strong> titre={top.score_details?.title_score ?? 0} · contenu={top.score_details?.content_score ?? 0} · couverture={top.score_details?.token_coverage ?? 0} · final={top.score_details?.final_score ?? top.score}
+                              </div>
+                              {(top.evidence_excerpt || group.evidence_excerpt) ? (
+                                <div className="rounded border border-stone-200 bg-stone-50 p-2 text-xs text-stone-700 leading-relaxed">
+                                  {highlightByTokens(top.evidence_excerpt || group.evidence_excerpt, candidateTokens)}
+                                </div>
+                              ) : null}
+                            </div>
+                          ) : (
+                            <div className="text-xs text-stone-500">Aucune suggestion RL fiable pour ce candidat.</div>
+                          )}
+                        </div>
+                      )
+                    })}
                   </div>
 
                   <div className="space-y-1">
                     <div className="text-xs text-stone-500">Texte intégral extrait de html_brut (matching)</div>
                     <div className="text-sm text-stone-900 leading-relaxed max-h-48 overflow-auto rounded-lg border border-stone-200 bg-white p-3">
                       {sourceText
-                        ? highlightByTokens(sourceText, highlightTokens)
+                        ? highlightByTokens(sourceText, globalTokens)
                         : <span className="text-stone-500">Aucun contenu disponible (html_brut vide).</span>}
                     </div>
                   </div>

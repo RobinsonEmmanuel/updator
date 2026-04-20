@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState, type MouseEvent } from "react"
 import { Link } from "react-router-dom"
-import { RefreshCw, Settings, Search, Link2, Sparkles, Loader2, PanelRight, X, Info, BookOpen, Trash2, ChevronDown, ArrowLeft } from "lucide-react"
+import { RefreshCw, Settings, Search, Link2, Sparkles, Loader2, PanelRight, X, Info, BookOpen, Trash2, ChevronDown, ArrowLeft, ChevronsDown, ChevronsUp } from "lucide-react"
 import { SiteCardsGrid } from "@/components/shared"
 import { useSiteContext } from "@/lib/SiteContext"
 import {
@@ -8,6 +8,7 @@ import {
   useArticlePoiManualLink,
   useArticlePoiRecompute,
   useArticlePoiRecomputeArticle,
+  useArticlePoiRecomputeCandidate,
   useArticlePoiRegionPois,
   useArticlePoiUnlink,
   useSiteCategories,
@@ -248,7 +249,13 @@ function parseSectionsFromHtml(html: string, candidates: CandidateSectionMeta[])
 
 function highlightSectionHtmlByCandidates(
   html: string,
-  candidates: Array<{ candidate_id: string; name: string }>,
+  candidates: Array<{
+    candidate_id: string
+    name: string
+    section_title?: string
+    evidence_excerpt?: string
+    occurrences?: Array<{ excerpt?: string; section_title?: string }>
+  }>,
   activeCandidateId: string | null
 ): string {
   const source = html || ""
@@ -256,20 +263,73 @@ function highlightSectionHtmlByCandidates(
   const parser = new DOMParser()
   const doc = parser.parseFromString(source, "text/html")
 
-  const entries = candidates
-    .map((candidate) => ({
+  const buildEvidenceVariants = (candidate: {
+    name: string
+    section_title?: string
+    evidence_excerpt?: string
+    occurrences?: Array<{ excerpt?: string; section_title?: string }>
+  }): string[] => {
+    const snippets = [
+      candidate.section_title || "",
+      candidate.evidence_excerpt || "",
+      ...(candidate.occurrences || []).flatMap((entry) => [entry.excerpt || "", entry.section_title || ""]),
+    ]
+    const seedToken = normalizeForMatch(candidate.name)
+      .split(" ")
+      .find((token) => token.length >= 4)
+    if (!seedToken) return []
+
+    return snippets
+      .flatMap((snippet) => decodeHtmlEntities(snippet).split(/[.!?;\n]/g))
+      .map((part) => part.replace(/\s+/g, " ").replace(/[.…]/g, "").trim())
+      .filter((part) => part.length >= 8 && part.length <= 90)
+      .filter((part) => normalizeForMatch(part).includes(seedToken))
+  }
+
+  const baseEntries = candidates
+    .map((candidate) => {
+      const label = decodeHtmlEntities(candidate.name).trim()
+      return {
       candidateId: candidate.candidate_id,
-      label: decodeHtmlEntities(candidate.name).trim(),
-      lower: decodeHtmlEntities(candidate.name).trim().toLowerCase(),
-    }))
+      label,
+      normalized: normalizeForMatch(candidate.name),
+      evidenceVariants: buildEvidenceVariants(candidate),
+      }
+    })
     .filter((entry) => entry.label.length >= 3)
     .sort((a, b) => b.label.length - a.label.length)
 
-  if (entries.length === 0) return doc.body.innerHTML
-  const escaped = entries.map((entry) => entry.label.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")).join("|")
-  if (!escaped) return doc.body.innerHTML
-  const byTerm = new Map(entries.map((entry) => [entry.lower, entry.candidateId]))
-  const regex = new RegExp(`(${escaped})`, "gi")
+  if (baseEntries.length === 0) return doc.body.innerHTML
+
+  const variants: Array<{ pattern: string; candidateId: string; normalized: string }> = []
+  const seenVariant = new Set<string>()
+  baseEntries.forEach((entry) => {
+    const raw = entry.label
+    const withCurlyApostrophe = raw.replace(/'/g, "’")
+    const withStraightApostrophe = raw.replace(/’/g, "'")
+    const noParen = raw.replace(/\([^)]*\)/g, " ").replace(/\s+/g, " ").trim()
+    const acronym = (raw.match(/\(([^)]+)\)/)?.[1] || "").trim()
+    ;[raw, withCurlyApostrophe, withStraightApostrophe, noParen, acronym, ...entry.evidenceVariants]
+      .filter((v) => v && v.length >= 3)
+      .forEach((variant) => {
+        const normalizedVariant = normalizeForMatch(variant)
+        if (!normalizedVariant) return
+        const key = `${entry.candidateId}:${normalizedVariant}`
+        if (seenVariant.has(key)) return
+        seenVariant.add(key)
+        const escaped = variant
+          .replace(/[.*+?^${}()|[\]\\]/g, "\\$&")
+          .replace(/\\\s\+/g, "\\s+")
+          .replace(/\s+/g, "\\s+")
+          .replace(/['’`´]/g, "['’`´]")
+          .replace(/-/g, "[-–—]")
+        variants.push({ pattern: escaped, candidateId: entry.candidateId, normalized: normalizedVariant })
+      })
+  })
+
+  const patterns = variants.map((entry) => entry.pattern)
+  if (patterns.length === 0) return doc.body.innerHTML
+  const regex = new RegExp(`(${patterns.join("|")})`, "gi")
   const walker = doc.createTreeWalker(doc.body, NodeFilter.SHOW_TEXT)
   const textNodes: Text[] = []
   let node = walker.nextNode()
@@ -289,7 +349,21 @@ function highlightSectionHtmlByCandidates(
     let lastIndex = 0
     textValue.replace(regex, (match, _group, offset) => {
       if (offset > lastIndex) frag.appendChild(doc.createTextNode(textValue.slice(lastIndex, offset)))
-      const candidateId = byTerm.get(match.toLowerCase())
+      const normalizedMatch = normalizeForMatch(match)
+      const candidateId =
+        variants.find(
+          (entry) =>
+            normalizedMatch === entry.normalized ||
+            normalizedMatch.includes(entry.normalized) ||
+            entry.normalized.includes(normalizedMatch)
+        )?.candidateId ||
+        baseEntries.find(
+          (entry) =>
+            normalizedMatch === entry.normalized ||
+            normalizedMatch.includes(entry.normalized) ||
+            entry.normalized.includes(normalizedMatch)
+        )?.candidateId ||
+        null
       const mark = doc.createElement("mark")
       mark.textContent = match
       if (candidateId) {
@@ -310,6 +384,50 @@ function highlightSectionHtmlByCandidates(
   })
 
   return doc.body.innerHTML
+}
+
+function resolveSectionTitleCandidateId(
+  title: string,
+  candidates: Array<{
+    candidate_id: string
+    name: string
+    section_title?: string
+    occurrences?: Array<{ section_title?: string }>
+  }>
+): string | null {
+  const normalizedTitle = normalizeForMatch(title)
+  if (!normalizedTitle) return null
+  for (const candidate of candidates) {
+    const variants = [
+      candidate.name,
+      candidate.section_title || "",
+      ...(candidate.occurrences || []).map((entry) => entry.section_title || ""),
+    ]
+      .map((value) => normalizeForMatch(value))
+      .filter((value) => value.length >= 3)
+    if (
+      variants.some(
+        (variant) =>
+          normalizedTitle.includes(variant) ||
+          variant.includes(normalizedTitle) ||
+          directionalWordOverlap(normalizedTitle, variant) >= 0.6
+      )
+    ) {
+      return candidate.candidate_id
+    }
+  }
+  return null
+}
+
+function directionalWordOverlap(a: string, b: string): number {
+  const aWords = new Set(a.split(" ").filter((word) => word.length >= 3))
+  const bWords = new Set(b.split(" ").filter((word) => word.length >= 3))
+  if (aWords.size === 0 || bWords.size === 0) return 0
+  let overlap = 0
+  aWords.forEach((word) => {
+    if (bWords.has(word)) overlap++
+  })
+  return overlap / Math.max(1, Math.min(aWords.size, bWords.size))
 }
 
 function NoSitesMessage() {
@@ -370,6 +488,7 @@ export function PoiArticleCatchup() {
   })
   const recompute = useArticlePoiRecompute(siteId)
   const recomputeArticle = useArticlePoiRecomputeArticle(siteId)
+  const recomputeCandidate = useArticlePoiRecomputeCandidate(siteId)
   const manualLink = useArticlePoiManualLink(siteId)
   const unlinkPoi = useArticlePoiUnlink(siteId)
   const siteCategories = useSiteCategories(siteId)
@@ -585,7 +704,12 @@ export function PoiArticleCatchup() {
     )
   }
 
-  const mutationPending = recompute.isPending || manualLink.isPending || unlinkPoi.isPending || recomputeArticle.isPending
+  const mutationPending =
+    recompute.isPending ||
+    manualLink.isPending ||
+    unlinkPoi.isPending ||
+    recomputeArticle.isPending ||
+    recomputeCandidate.isPending
 
   const pushLog = (level: ActionLogLevel, message: string) => {
     const entry: ActionLogEntry = {
@@ -708,6 +832,31 @@ export function PoiArticleCatchup() {
     })
   }
 
+  const applyRecomputedCandidateInPanel = (candidateId: string, nextCandidate: ArticlePoiBacklogRow["candidateGroups"][number]) => {
+    setLinkPanelRow((prev) => {
+      if (!prev) return prev
+      const current = prev.detectedCandidates || prev.candidateGroups || []
+      const nextGroups = current.map((group, index) =>
+        group.candidate_id === candidateId
+          ? {
+              ...nextCandidate,
+              is_primary: index === 0,
+              suggestions: Array.isArray(nextCandidate.suggestions) ? nextCandidate.suggestions : [],
+            }
+          : group
+      )
+      const linkedCount = nextGroups.filter((group) => !!group.rl_place_id).length
+      return {
+        ...prev,
+        detectedCandidates: nextGroups,
+        candidateGroups: nextGroups,
+        linkedPoiCount: linkedCount,
+        associatedPoiCount: linkedCount,
+        hasLinkedPoi: linkedCount > 0,
+      }
+    })
+  }
+
   const handleScanSite = () => {
     setScanModalOpen(true)
     pushLog("info", `Scan site lancé (${selectedSite.name})`)
@@ -744,6 +893,49 @@ export function PoiArticleCatchup() {
         },
       }
     )
+  }
+
+  const triggerRecomputeCandidate = (
+    row: ArticlePoiBacklogRow,
+    candidateId: string,
+    candidateName: string,
+    options?: { suggestionId?: string; suggestionName?: string }
+  ) => {
+    const displayTitle = decodeHtmlEntities(row.title)
+    const displayCandidate = decodeHtmlEntities(candidateName)
+    const modeLabel = options?.suggestionId
+      ? `ciblé suggestion (${decodeHtmlEntities(options.suggestionName || options.suggestionId)})`
+      : "candidat"
+    pushLog("info", `Relance ${modeLabel} lancée: ${displayTitle} · ${displayCandidate}`)
+    recomputeCandidate.mutate(
+      {
+        articleId: row.articleId,
+        candidateId,
+        refreshFromWp: false,
+        onlySuggestionRlPlaceId: options?.suggestionId,
+      },
+      {
+        onSuccess: (res) => {
+          applyRecomputedCandidateInPanel(candidateId, res.candidate)
+          void backlog.refetch()
+          pushLog(
+            "success",
+            `Relance ${modeLabel} terminée (${displayCandidate}): ${res.suggestionsCount} suggestion(s), RL chargés=${res.rlPlacesLoaded}`
+          )
+        },
+        onError: (error) => {
+          pushLog("error", `Relance ${modeLabel} en erreur (${displayCandidate}): ${error.message}`)
+        },
+      }
+    )
+  }
+
+  const expandAllSections = () => {
+    setOpenSectionIds(articleSections.map((section) => section.id))
+  }
+
+  const collapseAllSections = () => {
+    setOpenSectionIds([])
   }
 
   const toggleSection = (sectionId: string) => {
@@ -1118,11 +1310,34 @@ export function PoiArticleCatchup() {
                         </button>
                       </div>
                     ) : null}
+                    <div className="mt-2 flex items-center gap-1.5">
+                      <button
+                        type="button"
+                        onClick={expandAllSections}
+                        disabled={articleSections.length === 0 || openSectionIds.length === articleSections.length}
+                        className="inline-flex items-center gap-1 rounded border border-stone-200 bg-stone-50 px-2 py-1 text-[11px] text-stone-700 hover:bg-stone-100 disabled:opacity-50"
+                        title="Tout déplier"
+                      >
+                        <ChevronsDown className="h-3.5 w-3.5" />
+                        Tout déplier
+                      </button>
+                      <button
+                        type="button"
+                        onClick={collapseAllSections}
+                        disabled={openSectionIds.length === 0}
+                        className="inline-flex items-center gap-1 rounded border border-stone-200 bg-stone-50 px-2 py-1 text-[11px] text-stone-700 hover:bg-stone-100 disabled:opacity-50"
+                        title="Tout replier"
+                      >
+                        <ChevronsUp className="h-3.5 w-3.5" />
+                        Tout replier
+                      </button>
+                    </div>
                     <div className="mt-2 max-h-[75vh] overflow-y-auto rounded-md bg-white p-2 space-y-1.5">
                       {articleSections.map((section) => {
                         const isOpen = openSectionIds.includes(section.id)
                         const sectionCandidates = panelCandidateGroups.filter((group) => section.candidateIds.includes(group.candidate_id))
                         const highlightedHtml = highlightSectionHtmlByCandidates(section.html, sectionCandidates, focusedCandidateId)
+                        const titleCandidateId = resolveSectionTitleCandidateId(section.title, sectionCandidates)
                         return (
                           <div key={section.id} className="rounded border border-stone-200/80 bg-white overflow-hidden">
                             <button
@@ -1131,7 +1346,21 @@ export function PoiArticleCatchup() {
                               className="w-full flex items-center justify-between gap-2 px-2.5 py-1.5 text-left hover:bg-stone-50"
                             >
                               <div className="min-w-0">
-                                <div className="text-sm font-medium text-stone-800 truncate">{decodeHtmlEntities(section.title)}</div>
+                                <div className="text-sm font-medium text-stone-800 truncate">
+                                  {titleCandidateId ? (
+                                    <span
+                                      className={
+                                        focusedCandidateId === titleCandidateId
+                                          ? "bg-orange-200 text-orange-900 rounded px-1"
+                                          : "bg-yellow-200 text-stone-900 rounded px-1"
+                                      }
+                                    >
+                                      {decodeHtmlEntities(section.title)}
+                                    </span>
+                                  ) : (
+                                    decodeHtmlEntities(section.title)
+                                  )}
+                                </div>
                                 <div className="text-[11px] text-stone-500">
                                   {section.candidateIds.length} candidat(s) · {section.suggestionCount} suggestion(s)
                                 </div>
@@ -1252,6 +1481,24 @@ export function PoiArticleCatchup() {
                               >
                                 <Info className="h-4 w-4" />
                               </button>
+                              {!isLinkedCandidate ? (
+                                <button
+                                  type="button"
+                                  onClick={() =>
+                                    triggerRecomputeCandidate(
+                                      linkPanelRow,
+                                      group.candidate_id,
+                                      group.name
+                                    )
+                                  }
+                                  disabled={mutationPending}
+                                  className="inline-flex items-center justify-center h-8 w-8 rounded border border-stone-200 bg-stone-50 text-stone-700 hover:bg-stone-100 disabled:opacity-60"
+                                  title="Relancer le scan POI réel pour ce candidat"
+                                  aria-label="Relancer le scan POI réel pour ce candidat"
+                                >
+                                  <RefreshCw className={cn("h-4 w-4", recomputeCandidate.isPending && "animate-spin")} />
+                                </button>
+                              ) : null}
                               {!isLinkedCandidate ? (
                                 <button
                                   type="button"
@@ -1385,62 +1632,63 @@ export function PoiArticleCatchup() {
                                     })
                                   }
                                   return (
-                                  <button
-                                    key={s.rl_place_id}
-                                    type="button"
-                                    onClick={() =>
-                                      manualLink.mutate(
-                                        {
-                                          articleId: linkPanelRow.articleId,
-                                          rlPlaceId: s.rl_place_id,
-                                          rlPlaceName: s.name,
-                                          placeType: s.place_type,
-                                          placeTypeLabelFr: typeLabel,
-                                          clusterId: s.cluster_id,
-                                          clusterName: clusterLabel,
-                                          candidateId: group.candidate_id,
-                                          confidence: "high",
-                                          score: s.score ?? 1,
-                                          validated: true,
-                                        },
-                                        {
-                                          onSuccess: () =>
-                                            {
-                                              applyLinkedCandidateInPanel({
-                                                candidateId: group.candidate_id,
-                                                rlPlaceId: s.rl_place_id,
-                                                rlPlaceName: s.name,
-                                                placeType: s.place_type,
-                                                placeTypeLabelFr: typeLabel,
-                                                clusterId: s.cluster_id,
-                                                clusterName: clusterLabel,
-                                              })
-                                              void backlog.refetch()
-                                              pushLog(
-                                                "success",
-                                                `Liaison OK (${decodeHtmlEntities(linkPanelRow.title)}) -> ${s.rl_place_id}`
-                                              )
-                                            },
-                                          onError: (error) =>
-                                            pushLog("error", `Erreur liaison manuelle (${decodeHtmlEntities(linkPanelRow.title)}): ${error.message}`),
-                                        }
-                                      )
-                                    }
-                                    className="w-full text-left rounded-lg border border-stone-200 bg-white px-2.5 py-1.5 text-[11px] text-stone-700 hover:bg-orange-50"
-                                  >
-                                    <div
-                                      className="leading-snug break-words"
-                                      style={{ display: "-webkit-box", WebkitLineClamp: 2, WebkitBoxOrient: "vertical", overflow: "hidden" }}
+                                  <div key={s.rl_place_id} className="flex items-stretch gap-1">
+                                    <button
+                                      type="button"
+                                      onClick={() =>
+                                        manualLink.mutate(
+                                          {
+                                            articleId: linkPanelRow.articleId,
+                                            rlPlaceId: s.rl_place_id,
+                                            rlPlaceName: s.name,
+                                            placeType: s.place_type,
+                                            placeTypeLabelFr: typeLabel,
+                                            clusterId: s.cluster_id,
+                                            clusterName: clusterLabel,
+                                            candidateId: group.candidate_id,
+                                            confidence: "high",
+                                            score: s.score ?? 1,
+                                            validated: true,
+                                          },
+                                          {
+                                            onSuccess: () =>
+                                              {
+                                                applyLinkedCandidateInPanel({
+                                                  candidateId: group.candidate_id,
+                                                  rlPlaceId: s.rl_place_id,
+                                                  rlPlaceName: s.name,
+                                                  placeType: s.place_type,
+                                                  placeTypeLabelFr: typeLabel,
+                                                  clusterId: s.cluster_id,
+                                                  clusterName: clusterLabel,
+                                                })
+                                                void backlog.refetch()
+                                                pushLog(
+                                                  "success",
+                                                  `Liaison OK (${decodeHtmlEntities(linkPanelRow.title)}) -> ${s.rl_place_id}`
+                                                )
+                                              },
+                                            onError: (error) =>
+                                              pushLog("error", `Erreur liaison manuelle (${decodeHtmlEntities(linkPanelRow.title)}): ${error.message}`),
+                                          }
+                                        )
+                                      }
+                                      className="flex-1 text-left rounded-lg border border-stone-200 bg-white px-2.5 py-1.5 text-[11px] text-stone-700 hover:bg-orange-50"
                                     >
-                                      <span className="font-medium text-stone-800">{decodeHtmlEntities(s.name)}</span>
-                                      <span className="text-stone-500"> · </span>
-                                      <span className="text-stone-600">{typeLabel}</span>
-                                      <span className="text-stone-500"> · </span>
-                                      <span className="text-stone-600">{clusterLabel}</span>
-                                      <span className="text-stone-500"> · </span>
-                                      <span className="font-medium text-stone-700">{Math.round(s.score * 100)}%</span>
-                                    </div>
-                                  </button>
+                                      <div
+                                        className="leading-snug break-words"
+                                        style={{ display: "-webkit-box", WebkitLineClamp: 2, WebkitBoxOrient: "vertical", overflow: "hidden" }}
+                                      >
+                                        <span className="font-medium text-stone-800">{decodeHtmlEntities(s.name)}</span>
+                                        <span className="text-stone-500"> · </span>
+                                        <span className="text-stone-600">{typeLabel}</span>
+                                        <span className="text-stone-500"> · </span>
+                                        <span className="text-stone-600">{clusterLabel}</span>
+                                        <span className="text-stone-500"> · </span>
+                                        <span className="font-medium text-stone-700">{Math.round(s.score * 100)}%</span>
+                                      </div>
+                                    </button>
+                                  </div>
                                   )
                                 })}
                               </div>

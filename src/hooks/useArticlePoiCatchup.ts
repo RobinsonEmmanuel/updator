@@ -140,6 +140,18 @@ interface RecomputeArticleResponse {
   refreshed: boolean
 }
 
+interface RecomputeCandidateResponse {
+  success: boolean
+  articleId: string
+  candidateId: string
+  scopedSuggestion: boolean
+  refreshFromWp: boolean
+  refreshed: boolean
+  rlPlacesLoaded: number
+  suggestionsCount: number
+  candidate: PoiCandidateGroup
+}
+
 interface SiteCategory {
   id: number
   name: string
@@ -229,6 +241,30 @@ export function useArticlePoiRecomputeArticle(siteId?: string) {
       })
       const data = (await res.json().catch(() => ({}))) as RecomputeArticleResponse & { error?: string }
       if (!res.ok) throw new Error(data.error || "Failed to recompute article")
+      return data
+    },
+    onSuccess: () => {
+      if (siteId) queryClient.invalidateQueries({ queryKey: ["article-poi-backlog", siteId] })
+    },
+  })
+}
+
+export function useArticlePoiRecomputeCandidate(siteId?: string) {
+  const queryClient = useQueryClient()
+  return useMutation<
+    RecomputeCandidateResponse,
+    Error,
+    { articleId: string; candidateId: string; refreshFromWp?: boolean; onlySuggestionRlPlaceId?: string }
+  >({
+    mutationFn: async ({ articleId, candidateId, refreshFromWp = false, onlySuggestionRlPlaceId }) => {
+      if (!siteId) throw new Error("No site selected")
+      const res = await ingestionFetch(ingestionApiUrl(`/api/v1/article-poi/${articleId}/candidate/recompute`), {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ siteId, candidateId, refreshFromWp, onlySuggestionRlPlaceId }),
+      })
+      const data = (await res.json().catch(() => ({}))) as RecomputeCandidateResponse & { error?: string }
+      if (!res.ok) throw new Error(data.error || "Failed to recompute candidate")
       return data
     },
     onSuccess: () => {

@@ -17,6 +17,7 @@ export {
   useArticlePoiBacklog,
   useArticlePoiRecompute,
   useArticlePoiRecomputeArticle,
+  useArticlePoiRecomputeCandidate,
   useArticlePoiManualLink,
   useArticlePoiUnlink,
   useArticlePoiCreateRl,

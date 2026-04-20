@@ -47,7 +47,19 @@ export interface PoiCandidateGroup {
     excerpt: string
     hits: number
   }>
-  suggestions: PoiSuggestion[]
+  suggestions?: PoiSuggestion[]
+  is_primary?: boolean
+  link_status?: PoiAssociationStatus
+  rl_place_id?: string
+  rl_place_name?: string | null
+  rl_region_id?: string
+  rl_place_type?: string
+  rl_place_type_label_fr?: string
+  rl_cluster_id?: string
+  rl_cluster_name?: string
+  validated?: boolean
+  created_via_write?: boolean
+  updated_at?: string
 }
 
 export interface PoiAssociation {
@@ -232,6 +244,10 @@ export function useArticlePoiManualLink(siteId?: string) {
       articleId: string
       rlPlaceId: string
       rlPlaceName?: string
+      placeType?: string
+      placeTypeLabelFr?: string
+      clusterId?: string
+      clusterName?: string
       confidence?: PoiConfidence
       score?: number
       validated?: boolean
@@ -245,6 +261,10 @@ export function useArticlePoiManualLink(siteId?: string) {
           siteId,
           rlPlaceId: payload.rlPlaceId,
           rlPlaceName: payload.rlPlaceName,
+          placeType: payload.placeType,
+          placeTypeLabelFr: payload.placeTypeLabelFr,
+          clusterId: payload.clusterId,
+          clusterName: payload.clusterName,
           candidateId: payload.candidateId,
           confidence: payload.confidence ?? "high",
           score: payload.score ?? 1,
@@ -253,6 +273,29 @@ export function useArticlePoiManualLink(siteId?: string) {
       })
       const data = (await res.json().catch(() => ({}))) as { error?: string }
       if (!res.ok) throw new Error(data.error || "Failed to link POI")
+      return data
+    },
+    onSuccess: () => {
+      if (siteId) queryClient.invalidateQueries({ queryKey: ["article-poi-backlog", siteId] })
+    },
+  })
+}
+
+export function useArticlePoiUnlink(siteId?: string) {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: async (payload: { articleId: string; candidateId: string }) => {
+      if (!siteId) throw new Error("No site selected")
+      const res = await ingestionFetch(ingestionApiUrl(`/api/v1/article-poi/${payload.articleId}/unlink`), {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          siteId,
+          candidateId: payload.candidateId,
+        }),
+      })
+      const data = (await res.json().catch(() => ({}))) as { error?: string }
+      if (!res.ok) throw new Error(data.error || "Failed to unlink POI")
       return data
     },
     onSuccess: () => {

@@ -18,6 +18,7 @@ export {
   useArticlePoiRecompute,
   useArticlePoiRecomputeArticle,
   useArticlePoiManualLink,
+  useArticlePoiUnlink,
   useArticlePoiCreateRl,
   useArticlePoiRegionPois,
   useSiteCategories,

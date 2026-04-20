@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react"
+import { useEffect, useMemo, useRef, useState } from "react"
 import { Link } from "react-router-dom"
 import { RefreshCw, Settings, Search, Link2, Sparkles, Loader2, PanelRight, X, Info } from "lucide-react"
 import { SiteCardsGrid } from "@/components/shared"
@@ -9,6 +9,7 @@ import {
   useArticlePoiRecompute,
   useArticlePoiRecomputeArticle,
   useArticlePoiRegionPois,
+  useArticlePoiUnlink,
   useSiteCategories,
   type PoiAssociationStatus,
   type ArticlePoiBacklogRow,
@@ -140,12 +141,16 @@ export function PoiArticleCatchup() {
   const [selectedRegionPoi, setSelectedRegionPoi] = useState<{
     rl_place_id: string
     name: string
+    place_type?: string
+    place_type_label_fr?: string
+    cluster_name?: string
     confidenceScore?: number
   } | null>(null)
   const [imagePreviewSrc, setImagePreviewSrc] = useState<string | null>(null)
   const [selectedCandidateId, setSelectedCandidateId] = useState<string | null>(null)
+  const [annuaireModalCandidateId, setAnnuaireModalCandidateId] = useState<string | null>(null)
+  const [unlinkConfirmCandidateId, setUnlinkConfirmCandidateId] = useState<string | null>(null)
   const [expandedCandidateInfo, setExpandedCandidateInfo] = useState<Record<string, boolean>>({})
-  const [detailRightTab, setDetailRightTab] = useState<"matching" | "directory">("matching")
   const [scanModalOpen, setScanModalOpen] = useState(false)
   const [actionLogs, setActionLogs] = useState<ActionLogEntry[]>([])
 
@@ -159,8 +164,9 @@ export function PoiArticleCatchup() {
   const recompute = useArticlePoiRecompute(siteId)
   const recomputeArticle = useArticlePoiRecomputeArticle(siteId)
   const manualLink = useArticlePoiManualLink(siteId)
+  const unlinkPoi = useArticlePoiUnlink(siteId)
   const siteCategories = useSiteCategories(siteId)
-  const regionPois = useArticlePoiRegionPois({ siteId, q: regionPoiSearch, limit: 120 })
+  const regionPois = useArticlePoiRegionPois({ siteId, q: regionPoiSearch, limit: 1000 })
 
   const filteredRows = useMemo(() => {
     const rows = backlog.data?.data || []
@@ -187,6 +193,18 @@ export function PoiArticleCatchup() {
   const selectedCandidate = useMemo(
     () => panelCandidateGroups.find((g) => g.candidate_id === selectedCandidateId) || panelCandidateGroups[0],
     [panelCandidateGroups, selectedCandidateId]
+  )
+  const linkedPanelCandidateGroups = useMemo(
+    () => panelCandidateGroups.filter((group) => !!group.rl_place_id),
+    [panelCandidateGroups]
+  )
+  const unlinkedPanelCandidateGroups = useMemo(
+    () => panelCandidateGroups.filter((group) => !group.rl_place_id),
+    [panelCandidateGroups]
+  )
+  const annuaireModalCandidate = useMemo(
+    () => panelCandidateGroups.find((g) => g.candidate_id === annuaireModalCandidateId) || null,
+    [panelCandidateGroups, annuaireModalCandidateId]
   )
 
   const availableClusterNames = useMemo(
@@ -232,6 +250,41 @@ export function PoiArticleCatchup() {
       )
     })
   }, [regionPois.data, regionPoiSearch, regionPoiClusterFilter, regionPoiTypeFilter])
+  const regionPoiById = useMemo(() => {
+    return new Map((regionPois.data || []).map((poi) => [poi.rl_place_id, poi]))
+  }, [regionPois.data])
+  const placeTypeLabelByType = useMemo(() => {
+    const map = new Map<string, string>()
+    ;(regionPois.data || []).forEach((poi) => {
+      const key = (poi.place_type || "").trim().toLowerCase()
+      const label = decodeHtmlEntities(poi.place_type_label_fr || "").trim()
+      if (key && label && !map.has(key)) map.set(key, label)
+    })
+    return map
+  }, [regionPois.data])
+  const unknownMetaLogRef = useRef<Set<string>>(new Set())
+  const logUnknownMeta = (
+    kind: "linked" | "suggestion",
+    candidateId: string,
+    rlPlaceId: string,
+    reason: "missing_cluster" | "missing_type",
+    extra: Record<string, unknown>
+  ) => {
+    const key = `${kind}:${candidateId}:${rlPlaceId}:${reason}`
+    if (unknownMetaLogRef.current.has(key)) return
+    unknownMetaLogRef.current.add(key)
+    console.warn("[Studio Match POI] Métadonnée RL manquante", {
+      reason,
+      kind,
+      candidateId,
+      rlPlaceId,
+      siteId,
+      articleId: linkPanelRow?.articleId,
+      regionPoisLoaded: (regionPois.data || []).length,
+      regionPoisLimit: 1000,
+      ...extra,
+    })
+  }
   const candidateHighlightTerms = useMemo(
     () => panelCandidateGroups.map((group) => group.name).filter((name) => (name || "").trim().length > 0),
     [panelCandidateGroups]
@@ -251,6 +304,22 @@ export function PoiArticleCatchup() {
     return () => window.removeEventListener("keydown", onKeydown)
   }, [linkPanelRow])
 
+  useEffect(() => {
+    if (!linkPanelRow) return
+    const latestRows = backlog.data?.data || []
+    const updated = latestRows.find((row) => row.articleId === linkPanelRow.articleId)
+    if (updated) {
+      setLinkPanelRow(updated)
+      if (selectedCandidateId) {
+        const groups = updated.detectedCandidates || updated.candidateGroups || []
+        const stillExists = groups.some((g) => g.candidate_id === selectedCandidateId)
+        if (!stillExists) setSelectedCandidateId(groups[0]?.candidate_id || null)
+      }
+      return
+    }
+    // If current filtered page no longer contains the article, keep panel as-is.
+  }, [backlog.data?.data, linkPanelRow?.articleId, selectedCandidateId])
+
   if (hasNoSites) return <NoSitesMessage />
 
   if (isAllSitesSelected || !selectedSite) {
@@ -267,7 +336,7 @@ export function PoiArticleCatchup() {
     )
   }
 
-  const mutationPending = recompute.isPending || manualLink.isPending || recomputeArticle.isPending
+  const mutationPending = recompute.isPending || manualLink.isPending || unlinkPoi.isPending || recomputeArticle.isPending
 
   const pushLog = (level: ActionLogLevel, message: string) => {
     const entry: ActionLogEntry = {
@@ -290,15 +359,101 @@ export function PoiArticleCatchup() {
     setRegionPoiSearch("")
     setRegionPoiClusterFilter("")
     setRegionPoiTypeFilter("")
-    setDetailRightTab("matching")
     setSelectedRegionPoi(null)
+    setAnnuaireModalCandidateId(null)
     setExpandedCandidateInfo({})
   }
 
   const closeLinkPanel = () => {
     setLinkPanelRow(null)
     setSelectedRegionPoi(null)
+    setAnnuaireModalCandidateId(null)
+    setUnlinkConfirmCandidateId(null)
     setImagePreviewSrc(null)
+  }
+
+  const applyLinkedCandidateInPanel = (params: {
+    candidateId: string
+    rlPlaceId: string
+    rlPlaceName?: string
+    placeType?: string
+    placeTypeLabelFr?: string
+    clusterId?: string
+    clusterName?: string
+  }) => {
+    setLinkPanelRow((prev) => {
+      if (!prev) return prev
+      const current = prev.detectedCandidates || prev.candidateGroups || []
+      const nextGroups = current.map((group) =>
+        group.candidate_id === params.candidateId
+          ? {
+              ...group,
+              rl_place_id: params.rlPlaceId,
+              rl_place_name: params.rlPlaceName || group.rl_place_name || group.name,
+              rl_place_type: params.placeType || group.rl_place_type,
+              rl_place_type_label_fr: params.placeTypeLabelFr || group.rl_place_type_label_fr,
+              rl_cluster_id: params.clusterId || group.rl_cluster_id,
+              rl_cluster_name: params.clusterName || group.rl_cluster_name,
+              link_status: "linked" as PoiAssociationStatus,
+              validated: true,
+              suggestions: [],
+            }
+          : group
+      )
+      const linkedCount = nextGroups.filter((group) => !!group.rl_place_id).length
+      return {
+        ...prev,
+        status: linkedCount > 0 ? "linked" : prev.status,
+        detectedCandidates: nextGroups,
+        candidateGroups: nextGroups,
+        linkedPoiCount: linkedCount,
+        associatedPoiCount: linkedCount,
+        hasLinkedPoi: linkedCount > 0,
+        association: {
+          status: "linked",
+          rl_place_id: params.rlPlaceId,
+          rl_place_name: params.rlPlaceName,
+          candidate_id: params.candidateId,
+          validated: true,
+          score: 1,
+          confidence: "high",
+          updated_at: new Date().toISOString(),
+        },
+      }
+    })
+  }
+
+  const applyUnlinkedCandidateInPanel = (candidateId: string) => {
+    setLinkPanelRow((prev) => {
+      if (!prev) return prev
+      const current = prev.detectedCandidates || prev.candidateGroups || []
+      const nextGroups = current.map((group) =>
+        group.candidate_id === candidateId
+          ? {
+              ...group,
+              rl_place_id: undefined,
+              rl_place_name: undefined,
+              rl_place_type: undefined,
+              rl_place_type_label_fr: undefined,
+              rl_cluster_id: undefined,
+              rl_cluster_name: undefined,
+              link_status: "needs_review" as PoiAssociationStatus,
+              validated: false,
+            }
+          : group
+      )
+      const linkedCount = nextGroups.filter((group) => !!group.rl_place_id).length
+      return {
+        ...prev,
+        status: linkedCount > 0 ? "linked" : "needs_review",
+        detectedCandidates: nextGroups,
+        candidateGroups: nextGroups,
+        linkedPoiCount: linkedCount,
+        associatedPoiCount: linkedCount,
+        hasLinkedPoi: linkedCount > 0,
+        association: linkedCount > 0 ? prev.association : null,
+      }
+    })
   }
 
   const handleScanSite = () => {
@@ -519,24 +674,33 @@ export function PoiArticleCatchup() {
             <tbody>
               {filteredRows.map((row) => {
                 const candidates = row.detectedCandidates || row.candidateGroups || []
-                const previewSuggestions = Array.from(
+                const linkedCandidates = candidates.filter((candidate) => !!candidate.rl_place_id)
+                const linkedIds = new Set(linkedCandidates.map((candidate) => candidate.rl_place_id).filter(Boolean))
+                const allSuggestions = Array.from(
                   new Map(
                     candidates
+                      .filter((group) => !group.rl_place_id)
                       .flatMap((group) => (group.suggestions || []).slice(0, 2))
                       .sort((a, b) => b.score - a.score)
                       .map((s) => [s.rl_place_id, s])
                   ).values()
-                ).slice(0, 4)
+                )
+                const linkedPills = linkedCandidates
+                  .filter((candidate) => !!candidate.rl_place_id)
+                  .map((candidate) => ({
+                    rl_place_id: candidate.rl_place_id as string,
+                    name: candidate.rl_place_name || candidate.name,
+                    score: 1,
+                  }))
+                const previewSuggestions = [...linkedPills, ...allSuggestions.filter((s) => !linkedIds.has(s.rl_place_id))].slice(0, 4)
                 const displayTitle = decodeHtmlEntities(row.title)
-                const displayCandidate = decodeHtmlEntities(row.candidateName || "—")
                 const candidateCount = row.detectedCandidatesCount ?? candidates.length ?? (row.candidateName ? 1 : 0)
-                const unmatchedCount = row.unmatchedCandidatesCount ?? candidates.filter((g) => (g.suggestions || []).length === 0).length
+                const unmatchedCount = row.unmatchedCandidatesCount ?? candidates.filter((g) => !g.rl_place_id && (g.suggestions || []).length === 0).length
                 return (
                   <tr key={row.articleId} className="border-t border-stone-100 align-top">
                     <td className="px-4 py-3 min-w-[340px]">
                       <div className="font-medium text-stone-800">{displayTitle}</div>
                       <div className="text-xs text-stone-500 mt-1">{row.categories.join(" · ") || "Sans catégorie"}</div>
-                      <div className="text-xs text-stone-500 mt-1">Candidat principal: {displayCandidate}</div>
                       <div className="text-xs text-stone-500 mt-1">
                         Candidats détectés: {candidateCount} · Candidats sans suggestion RL: {unmatchedCount}
                       </div>
@@ -544,7 +708,12 @@ export function PoiArticleCatchup() {
                     <td className="px-4 py-3 min-w-[220px]">
                       <div className="font-medium text-stone-800">{row.linkedPoiCount ?? row.associatedPoiCount}</div>
                       <div className="text-xs text-stone-500 mt-1">
-                        {row.association?.rl_place_name || row.association?.rl_place_id || "Aucun lien RL"}
+                        {linkedCandidates.length > 0
+                          ? linkedCandidates
+                              .map((candidate) => decodeHtmlEntities(candidate.rl_place_name || candidate.name))
+                              .filter(Boolean)
+                              .join(" · ")
+                          : row.association?.rl_place_name || row.association?.rl_place_id || "Aucun lien RL"}
                       </div>
                     </td>
                     <td className="px-4 py-3 min-w-[360px]">
@@ -552,9 +721,10 @@ export function PoiArticleCatchup() {
                         <div className="flex flex-wrap gap-1.5">
                           {previewSuggestions.map((s) => {
                             const isOfficiallyLinked =
-                              !!row.association?.rl_place_id &&
-                              row.association.rl_place_id === s.rl_place_id &&
-                              (row.status === "linked" || row.status === "created" || row.association?.validated === true)
+                              linkedIds.has(s.rl_place_id) ||
+                              (!!row.association?.rl_place_id &&
+                                row.association.rl_place_id === s.rl_place_id &&
+                                (row.status === "linked" || row.status === "created" || row.association?.validated === true))
                             return (
                               <span
                                 key={s.rl_place_id}
@@ -685,221 +855,462 @@ export function PoiArticleCatchup() {
                 </div>
 
                 <div className="xl:col-span-4 space-y-3">
-                  <div className="inline-flex rounded-lg border border-stone-200 bg-white p-1">
-                    <button
-                      type="button"
-                      onClick={() => setDetailRightTab("matching")}
-                      className={cn(
-                        "px-3 py-1.5 text-xs rounded-md",
-                        detailRightTab === "matching" ? "bg-orange-100 text-orange-800" : "text-stone-600 hover:bg-stone-50"
-                      )}
-                    >
-                      Rapprochement
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => setDetailRightTab("directory")}
-                      className={cn(
-                        "px-3 py-1.5 text-xs rounded-md",
-                        detailRightTab === "directory" ? "bg-orange-100 text-orange-800" : "text-stone-600 hover:bg-stone-50"
-                      )}
-                    >
-                      Annuaire RL
-                    </button>
-                  </div>
-
-                  {detailRightTab === "matching" ? (
-                    <div className="space-y-3">
-                      <div className="rounded-lg border border-stone-200 bg-stone-50 p-3">
-                        <div className="text-xs text-stone-500">Candidat sélectionné</div>
-                        <div className="text-sm text-stone-800 mt-1">{selectedCandidate ? decodeHtmlEntities(selectedCandidate.name) : "Aucun candidat détecté"}</div>
-                        {selectedCandidate && (
-                          <div className="text-xs text-stone-500 mt-1">Score candidat: {Math.round((selectedCandidate.mention_score || 0) * 100)}%</div>
-                        )}
+                  <div className="space-y-3 max-h-[72vh] overflow-y-auto pr-1">
+                    {linkedPanelCandidateGroups.length > 0 ? (
+                      <div className="text-[11px] font-medium uppercase tracking-wide text-emerald-700 bg-emerald-50 border border-emerald-200 rounded px-2 py-1">
+                        POI déjà liés ({linkedPanelCandidateGroups.length})
                       </div>
-
-                      <div className="space-y-2">
-                        <div className="text-xs text-stone-500">Détecté dans le texte</div>
-                        <div className="space-y-2 max-h-56 overflow-y-auto">
-                          {panelCandidateGroups.map((group) => {
-                            const active = selectedCandidate?.candidate_id === group.candidate_id
-                            const expanded = !!expandedCandidateInfo[group.candidate_id]
-                            return (
-                              <div
-                                key={group.candidate_id}
-                                className={cn(
-                                  "w-full rounded-lg border p-2",
-                                  active ? "border-orange-300 bg-orange-50" : "border-stone-200 bg-white"
-                                )}
+                    ) : null}
+                    {[...linkedPanelCandidateGroups, ...unlinkedPanelCandidateGroups].map((group, index) => {
+                      const firstUnlinkedIndex = linkedPanelCandidateGroups.length
+                      const showUnlinkedHeader = unlinkedPanelCandidateGroups.length > 0 && index === firstUnlinkedIndex
+                      const active = selectedCandidate?.candidate_id === group.candidate_id
+                      const expanded = !!expandedCandidateInfo[group.candidate_id]
+                      const baseSuggestions = group.suggestions || []
+                      const isLinkedCandidate = !!group.rl_place_id
+                      const linkedPoi = group.rl_place_id ? regionPoiById.get(group.rl_place_id) : undefined
+                      const linkedTypeKey = (group.rl_place_type || linkedPoi?.place_type || "").trim().toLowerCase()
+                      const linkedTypeLabel = decodeHtmlEntities(
+                        group.rl_place_type_label_fr ||
+                          linkedPoi?.place_type_label_fr ||
+                          (linkedTypeKey ? placeTypeLabelByType.get(linkedTypeKey) : "") ||
+                          group.rl_place_type ||
+                          linkedPoi?.place_type ||
+                          "Type inconnu"
+                      )
+                      const linkedClusterName = decodeHtmlEntities(
+                        group.rl_cluster_name || linkedPoi?.cluster_names?.[0] || "Cluster inconnu"
+                      )
+                      const linkedClusterMeta =
+                        group.rl_cluster_id ||
+                        linkedPoi?.cluster_ids?.[0] ||
+                        null
+                      if (isLinkedCandidate && linkedClusterName === "Cluster inconnu") {
+                        logUnknownMeta("linked", group.candidate_id, group.rl_place_id || group.candidate_id, "missing_cluster", {
+                          candidateCluster: group.rl_cluster_name,
+                          poiCluster: linkedPoi?.cluster_names,
+                        })
+                      }
+                      if (isLinkedCandidate && linkedTypeLabel === "Type inconnu") {
+                        logUnknownMeta("linked", group.candidate_id, group.rl_place_id || group.candidate_id, "missing_type", {
+                          candidateType: group.rl_place_type,
+                          candidateTypeLabel: group.rl_place_type_label_fr,
+                          poiType: linkedPoi?.place_type,
+                          poiTypeLabel: linkedPoi?.place_type_label_fr,
+                        })
+                      }
+                      const suggestions = isLinkedCandidate ? [] : baseSuggestions
+                      return (
+                        <div key={group.candidate_id} className="space-y-2">
+                          {showUnlinkedHeader ? (
+                            <div className="text-[11px] font-medium uppercase tracking-wide text-stone-500 bg-stone-50 border border-stone-200 rounded px-2 py-1">
+                              Candidats à valider ({unlinkedPanelCandidateGroups.length})
+                            </div>
+                          ) : null}
+                        <div
+                          className={cn(
+                            "rounded-xl border p-3",
+                            isLinkedCandidate
+                              ? "border-emerald-200 bg-emerald-50/30"
+                              : active
+                                ? "border-orange-300 bg-orange-50/40"
+                                : "border-stone-200 bg-white"
+                          )}
+                        >
+                          <div className="flex items-center justify-between gap-2">
+                            <button
+                              type="button"
+                              onClick={() => setSelectedCandidateId(group.candidate_id)}
+                              className="text-left min-w-0 flex-1"
+                            >
+                              <div className="text-sm font-medium text-stone-800 break-words">
+                                {decodeHtmlEntities(group.name)}
+                              </div>
+                              <div className="text-xs text-stone-500 mt-0.5">
+                                {isLinkedCandidate
+                                  ? `POI RL validé`
+                                  : `Score ${Math.round((group.mention_score || 0) * 100)}% · ${suggestions.length} rapprochement(s)`}
+                              </div>
+                              {isLinkedCandidate ? (
+                                <div className="mt-1 text-[11px] text-stone-600 leading-relaxed">
+                                  <span>{linkedTypeLabel}</span>
+                                  <span className="text-stone-400"> · </span>
+                                  <span>{linkedClusterName}</span>
+                                </div>
+                              ) : null}
+                            </button>
+                            <div className="flex items-center gap-1.5">
+                              <button
+                                type="button"
+                                onClick={() =>
+                                  setExpandedCandidateInfo((prev) => ({
+                                    ...prev,
+                                    [group.candidate_id]: !expanded,
+                                  }))
+                                }
+                                className="inline-flex items-center gap-1 text-xs px-2 py-1 rounded border border-stone-200 text-stone-600 hover:bg-stone-50"
                               >
-                                <div className="flex items-center justify-between gap-2">
-                                  <button
-                                    type="button"
-                                    onClick={() => setSelectedCandidateId(group.candidate_id)}
-                                    className="text-left min-w-0 flex-1"
-                                  >
-                                    <div className="text-sm text-stone-800 truncate">{decodeHtmlEntities(group.name)}</div>
-                                    <div className="text-xs text-stone-500 mt-0.5">
-                                      Score {Math.round((group.mention_score || 0) * 100)}%
-                                    </div>
-                                  </button>
+                                <Info className="h-3.5 w-3.5" />
+                                Infos
+                              </button>
+                              {!isLinkedCandidate ? (
+                                <button
+                                  type="button"
+                                  onClick={() => {
+                                    setSelectedCandidateId(group.candidate_id)
+                                    setAnnuaireModalCandidateId(group.candidate_id)
+                                    setSelectedRegionPoi(null)
+                                  }}
+                                  className="inline-flex items-center gap-1 text-xs px-2 py-1 rounded border border-orange-200 bg-orange-50 text-orange-700 hover:bg-orange-100"
+                                >
+                                  Annuaire RL
+                                </button>
+                              ) : null}
+                              {isLinkedCandidate ? (
+                                <div className="relative">
                                   <button
                                     type="button"
                                     onClick={() =>
-                                      setExpandedCandidateInfo((prev) => ({
-                                        ...prev,
-                                        [group.candidate_id]: !expanded,
-                                      }))
+                                      setUnlinkConfirmCandidateId((prev) =>
+                                        prev === group.candidate_id ? null : group.candidate_id
+                                      )
                                     }
-                                    className="inline-flex items-center gap-1 text-xs px-2 py-1 rounded border border-stone-200 text-stone-600 hover:bg-stone-50"
+                                    disabled={mutationPending}
+                                    className="inline-flex items-center gap-1 text-xs px-2 py-1 rounded border border-red-300 bg-red-50 text-red-700 hover:bg-red-100 disabled:opacity-60"
+                                    title="Retirer la liaison RL de ce candidat"
                                   >
-                                    <Info className="h-3.5 w-3.5" />
-                                    Infos
+                                    Retirer lien RL
                                   </button>
+                                  {unlinkConfirmCandidateId === group.candidate_id ? (
+                                    <div className="absolute right-0 mt-1 z-20 w-56 rounded-md border border-red-200 bg-white shadow-sm p-2 text-[11px] text-stone-700">
+                                      <div className="mb-2">Confirmer le retrait du POI lié pour ce candidat ?</div>
+                                      <div className="flex items-center justify-end gap-1.5">
+                                        <button
+                                          type="button"
+                                          onClick={() => setUnlinkConfirmCandidateId(null)}
+                                          className="px-2 py-1 rounded border border-stone-200 text-stone-600 hover:bg-stone-50"
+                                        >
+                                          Annuler
+                                        </button>
+                                        <button
+                                          type="button"
+                                          onClick={() =>
+                                            unlinkPoi.mutate(
+                                              {
+                                                articleId: linkPanelRow.articleId,
+                                                candidateId: group.candidate_id,
+                                              },
+                                              {
+                                                onSuccess: () => {
+                                                  setUnlinkConfirmCandidateId(null)
+                                                  applyUnlinkedCandidateInPanel(group.candidate_id)
+                                                  void backlog.refetch()
+                                                  pushLog(
+                                                    "success",
+                                                    `Liaison retirée (${decodeHtmlEntities(linkPanelRow.title)}) · candidat ${decodeHtmlEntities(group.name)}`
+                                                  )
+                                                },
+                                                onError: (error) =>
+                                                  pushLog(
+                                                    "error",
+                                                    `Erreur retrait liaison (${decodeHtmlEntities(linkPanelRow.title)}): ${error.message}`
+                                                  ),
+                                              }
+                                            )
+                                          }
+                                          disabled={mutationPending}
+                                          className="px-2 py-1 rounded border border-red-300 bg-red-50 text-red-700 hover:bg-red-100 disabled:opacity-60"
+                                        >
+                                          Confirmer
+                                        </button>
+                                      </div>
+                                    </div>
+                                  ) : null}
                                 </div>
-                                {expanded && (
-                                  <div className="mt-2 text-xs text-stone-600 space-y-1">
-                                    <div><strong>Source:</strong> {group.source}</div>
-                                    <div><strong>Occurrences (freq):</strong> {group.frequency}</div>
-                                    <div><strong>Hits titres (h):</strong> {group.heading_hits} sur H1/H2/H3</div>
-                                    <div><strong>Suggestions RL (sugg):</strong> {group.suggestions.length}</div>
-                                  </div>
-                                )}
-                              </div>
-                            )
-                          })}
-                        </div>
-                      </div>
+                              ) : null}
+                            </div>
+                          </div>
 
-                      <div className="space-y-2">
-                        <div className="text-xs text-stone-500">Rapprochement RL ({selectedCandidate?.suggestions?.length || 0})</div>
-                        {selectedCandidate?.suggestions?.length ? (
-                          <div className="space-y-2 max-h-64 overflow-y-auto">
-                            {selectedCandidate.suggestions.slice(0, 8).map((s) => (
-                              <div key={s.rl_place_id} className="rounded-lg border border-stone-200 bg-white p-2">
-                                <div className="text-sm font-medium text-stone-800 truncate">{decodeHtmlEntities(s.name)}</div>
-                                <div className="text-xs text-stone-500 mt-0.5">
-                                  {decodeHtmlEntities(s.place_type_label_fr || s.place_type)} · {Math.round(s.score * 100)}%
-                                </div>
-                              </div>
-                            ))}
-                          </div>
-                        ) : (
-                          <div className="text-xs text-stone-500 rounded-lg border border-stone-200 bg-stone-50 p-2">
-                            Aucune suggestion RL disponible pour ce candidat.
-                          </div>
-                        )}
-                      </div>
-                    </div>
-                  ) : (
-                    <div className="space-y-3">
-                      <div className="space-y-2">
-                        <div className="text-xs text-stone-500">Moteur POI région (filtres)</div>
-                        <input
-                          value={regionPoiSearch}
-                          onChange={(e) => setRegionPoiSearch(e.target.value)}
-                          placeholder="Recherche nom, ID, cluster, type"
-                          className="w-full px-3 py-2 rounded-lg border border-stone-200 text-sm"
-                        />
-                        <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
-                          <select
-                            value={regionPoiClusterFilter}
-                            onChange={(e) => setRegionPoiClusterFilter(e.target.value)}
-                            className="w-full px-3 py-2 rounded-lg border border-stone-200 text-sm bg-white"
-                          >
-                            <option value="">Tous les clusters</option>
-                            {availableClusterNames.map((name) => (
-                              <option key={name} value={name}>{name}</option>
-                            ))}
-                          </select>
-                          <select
-                            value={regionPoiTypeFilter}
-                            onChange={(e) => setRegionPoiTypeFilter(e.target.value)}
-                            className="w-full px-3 py-2 rounded-lg border border-stone-200 text-sm bg-white"
-                          >
-                            <option value="">Toutes les catégories</option>
-                            {availableTypeLabels.map((label) => (
-                              <option key={label} value={label}>{label}</option>
-                            ))}
-                          </select>
-                        </div>
-                        <div className="max-h-60 overflow-y-auto space-y-1 rounded-lg border border-stone-200 bg-white p-2">
-                          {filteredRegionPois.map((poi) => (
-                            <button
-                              key={poi.rl_place_id}
-                              type="button"
-                              onClick={() => {
-                                setSelectedRegionPoi({
-                                  rl_place_id: poi.rl_place_id,
-                                  name: poi.name,
-                                })
-                              }}
-                              className={cn(
-                                "w-full text-left rounded border px-2 py-1.5 hover:bg-stone-50",
-                                selectedRegionPoi?.rl_place_id === poi.rl_place_id
-                                  ? "border-orange-300 bg-orange-50"
-                                  : "border-stone-100"
-                              )}
-                            >
-                              <div className="text-xs text-stone-800">{decodeHtmlEntities(poi.name)}</div>
-                              <div className="text-[11px] text-stone-500">
-                                {decodeHtmlEntities(poi.place_type_label_fr || poi.place_type)} · {(poi.cluster_names || [])[0] || "Cluster inconnu"}
-                              </div>
-                              <div className="text-[11px] text-stone-500 font-mono">{poi.rl_place_id}</div>
-                            </button>
-                          ))}
-                          {!regionPois.isLoading && filteredRegionPois.length === 0 && (
-                            <div className="text-xs text-stone-500 p-1">Aucun POI trouvé avec ces filtres.</div>
+                          {expanded && (
+                            <div className="mt-2 text-xs text-stone-600 space-y-1">
+                              <div><strong>Occurrences (freq):</strong> {group.frequency}</div>
+                              <div><strong>Hits titres (h):</strong> {group.heading_hits} sur H1/H2/H3</div>
+                              <div><strong>Suggestions RL (sugg):</strong> {suggestions.length}</div>
+                              {isLinkedCandidate ? (
+                                <>
+                                  <div><strong>Place type (clé):</strong> {group.rl_place_type || linkedPoi?.place_type || "—"}</div>
+                                  <div><strong>Cluster (id):</strong> {linkedClusterMeta || "—"}</div>
+                                  <div><strong>POI RL id:</strong> {group.rl_place_id || "—"}</div>
+                                </>
+                              ) : null}
+                            </div>
                           )}
-                        </div>
-                      </div>
 
-                      <div className="space-y-2">
-                        <div className="text-xs text-stone-500">Validation de la sélection</div>
-                        {selectedRegionPoi ? (
-                          <div className="text-xs text-stone-700 rounded border border-stone-200 bg-stone-50 p-2">
-                            Sélectionné: {decodeHtmlEntities(selectedRegionPoi.name)} ·{" "}
-                            <span className="font-mono">{selectedRegionPoi.rl_place_id}</span>
-                          </div>
-                        ) : (
-                          <div className="text-xs text-stone-500 rounded border border-stone-200 bg-stone-50 p-2">
-                            Sélectionne un POI dans la liste pour le lier.
-                          </div>
-                        )}
-                        <button
-                          type="button"
-                          disabled={mutationPending || !selectedRegionPoi?.rl_place_id}
-                          onClick={() =>
-                            manualLink.mutate(
-                              {
-                                articleId: linkPanelRow.articleId,
-                                rlPlaceId: selectedRegionPoi?.rl_place_id || "",
-                                rlPlaceName: selectedRegionPoi?.name || undefined,
-                                candidateId: selectedCandidate?.candidate_id || undefined,
-                                confidence: "high",
-                                score: 1,
-                                validated: true,
-                              },
-                              {
-                                onSuccess: () =>
-                                  pushLog(
-                                    "success",
-                                    `Liaison OK (${decodeHtmlEntities(linkPanelRow.title)}) -> ${selectedRegionPoi?.rl_place_id || ""}`
-                                  ),
-                                onError: (error) => pushLog("error", `Erreur liaison manuelle (${decodeHtmlEntities(linkPanelRow.title)}): ${error.message}`),
-                              }
-                            )
-                          }
-                          className="inline-flex items-center gap-1.5 px-3 py-2 rounded-lg text-xs border border-stone-200 bg-white text-stone-700 hover:bg-stone-50 disabled:opacity-60"
-                        >
-                          <Link2 className="h-3.5 w-3.5" />
-                          Valider et lier
-                        </button>
+                          {!isLinkedCandidate ? (
+                            <div className="mt-3 space-y-2">
+                              <div className="text-[11px] font-medium text-stone-500 uppercase tracking-wide">
+                                Rapprochements RL à valider
+                              </div>
+                              {suggestions.length > 0 ? (
+                              <div className="space-y-1">
+                                {suggestions.slice(0, 8).map((s) => {
+                                  const fallbackPoi = regionPoiById.get(s.rl_place_id)
+                                  const typeKey = (s.place_type || fallbackPoi?.place_type || "").trim().toLowerCase()
+                                  const typeLabel = decodeHtmlEntities(
+                                    s.place_type_label_fr ||
+                                      fallbackPoi?.place_type_label_fr ||
+                                      (typeKey ? placeTypeLabelByType.get(typeKey) : "") ||
+                                      s.place_type ||
+                                      fallbackPoi?.place_type ||
+                                      "Type inconnu"
+                                  )
+                                  const clusterLabel = decodeHtmlEntities(
+                                    s.cluster_name || s.cluster_names?.[0] || fallbackPoi?.cluster_names?.[0] || "Cluster inconnu"
+                                  )
+                                  if (clusterLabel === "Cluster inconnu") {
+                                    logUnknownMeta("suggestion", group.candidate_id, s.rl_place_id, "missing_cluster", {
+                                      suggestionCluster: s.cluster_name,
+                                      suggestionClusterNames: s.cluster_names,
+                                      poiCluster: fallbackPoi?.cluster_names,
+                                    })
+                                  }
+                                  if (typeLabel === "Type inconnu") {
+                                    logUnknownMeta("suggestion", group.candidate_id, s.rl_place_id, "missing_type", {
+                                      suggestionType: s.place_type,
+                                      suggestionTypeLabel: s.place_type_label_fr,
+                                      poiType: fallbackPoi?.place_type,
+                                      poiTypeLabel: fallbackPoi?.place_type_label_fr,
+                                    })
+                                  }
+                                  return (
+                                  <button
+                                    key={s.rl_place_id}
+                                    type="button"
+                                    onClick={() =>
+                                      manualLink.mutate(
+                                        {
+                                          articleId: linkPanelRow.articleId,
+                                          rlPlaceId: s.rl_place_id,
+                                          rlPlaceName: s.name,
+                                          placeType: s.place_type,
+                                          placeTypeLabelFr: typeLabel,
+                                          clusterId: s.cluster_id,
+                                          clusterName: clusterLabel,
+                                          candidateId: group.candidate_id,
+                                          confidence: "high",
+                                          score: s.score ?? 1,
+                                          validated: true,
+                                        },
+                                        {
+                                          onSuccess: () =>
+                                            {
+                                              applyLinkedCandidateInPanel({
+                                                candidateId: group.candidate_id,
+                                                rlPlaceId: s.rl_place_id,
+                                                rlPlaceName: s.name,
+                                                placeType: s.place_type,
+                                                placeTypeLabelFr: typeLabel,
+                                                clusterId: s.cluster_id,
+                                                clusterName: clusterLabel,
+                                              })
+                                              void backlog.refetch()
+                                              pushLog(
+                                                "success",
+                                                `Liaison OK (${decodeHtmlEntities(linkPanelRow.title)}) -> ${s.rl_place_id}`
+                                              )
+                                            },
+                                          onError: (error) =>
+                                            pushLog("error", `Erreur liaison manuelle (${decodeHtmlEntities(linkPanelRow.title)}): ${error.message}`),
+                                        }
+                                      )
+                                    }
+                                    className="w-full text-left rounded-lg border border-stone-200 bg-white px-2.5 py-1.5 text-[11px] text-stone-700 hover:bg-orange-50"
+                                  >
+                                    <div
+                                      className="leading-snug break-words"
+                                      style={{ display: "-webkit-box", WebkitLineClamp: 2, WebkitBoxOrient: "vertical", overflow: "hidden" }}
+                                    >
+                                      <span className="font-medium text-stone-800">{decodeHtmlEntities(s.name)}</span>
+                                      <span className="text-stone-500"> · </span>
+                                      <span className="text-stone-600">{typeLabel}</span>
+                                      <span className="text-stone-500"> · </span>
+                                      <span className="text-stone-600">{clusterLabel}</span>
+                                      <span className="text-stone-500"> · </span>
+                                      <span className="font-medium text-stone-700">{Math.round(s.score * 100)}%</span>
+                                    </div>
+                                  </button>
+                                  )
+                                })}
+                              </div>
+                              ) : (
+                                <div className="text-xs text-stone-500 rounded-lg border border-stone-200 bg-stone-50 p-2">
+                                  Aucun rapprochement RL pour ce candidat.
+                                </div>
+                              )}
+                            </div>
+                          ) : null}
+                        </div>
+                        </div>
+                      )
+                    })}
+                  </div>
+                </div>
+              </div>
+          </div>
+        </div>
+      )}
+
+      {annuaireModalCandidateId && annuaireModalCandidate && linkPanelRow && (
+        <div
+          className="fixed inset-0 z-50 bg-black/50 flex items-start justify-center p-4 overflow-y-auto"
+          onClick={() => setAnnuaireModalCandidateId(null)}
+        >
+          <div
+            className="bg-white rounded-xl w-full max-w-3xl shadow-xl border border-stone-200 max-h-[90vh] overflow-hidden flex flex-col"
+            onClick={(event) => event.stopPropagation()}
+          >
+            <div className="sticky top-0 z-10 bg-white border-b border-stone-200 px-5 py-4 flex items-start justify-between gap-3">
+              <div>
+                <h3 className="text-base font-semibold text-stone-800">Annuaire RL · Liaison manuelle</h3>
+                <p className="text-xs text-stone-500 mt-1">
+                  Candidat détecté: {decodeHtmlEntities(annuaireModalCandidate.name)}
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={() => setAnnuaireModalCandidateId(null)}
+                className="p-1.5 rounded border border-stone-200 text-stone-600 hover:bg-stone-50"
+                aria-label="Fermer annuaire RL"
+              >
+                <X className="h-4 w-4" />
+              </button>
+            </div>
+
+            <div className="px-5 py-4 overflow-y-auto space-y-3">
+              <div className="space-y-2">
+                <div className="text-xs text-stone-500">Moteur POI région (filtres)</div>
+                <input
+                  value={regionPoiSearch}
+                  onChange={(e) => setRegionPoiSearch(e.target.value)}
+                  placeholder="Recherche nom, ID, cluster, type"
+                  className="w-full px-3 py-2 rounded-lg border border-stone-200 text-sm"
+                />
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
+                  <select
+                    value={regionPoiClusterFilter}
+                    onChange={(e) => setRegionPoiClusterFilter(e.target.value)}
+                    className="w-full px-3 py-2 rounded-lg border border-stone-200 text-sm bg-white"
+                  >
+                    <option value="">Tous les clusters</option>
+                    {availableClusterNames.map((name) => (
+                      <option key={name} value={name}>{name}</option>
+                    ))}
+                  </select>
+                  <select
+                    value={regionPoiTypeFilter}
+                    onChange={(e) => setRegionPoiTypeFilter(e.target.value)}
+                    className="w-full px-3 py-2 rounded-lg border border-stone-200 text-sm bg-white"
+                  >
+                    <option value="">Toutes les catégories</option>
+                    {availableTypeLabels.map((label) => (
+                      <option key={label} value={label}>{label}</option>
+                    ))}
+                  </select>
+                </div>
+                <div className="max-h-64 overflow-y-auto space-y-1 rounded-lg border border-stone-200 bg-white p-2">
+                  {filteredRegionPois.map((poi) => (
+                    <button
+                      key={poi.rl_place_id}
+                      type="button"
+                      onClick={() => {
+                        setSelectedRegionPoi({
+                          rl_place_id: poi.rl_place_id,
+                          name: poi.name,
+                          place_type: poi.place_type,
+                          place_type_label_fr: poi.place_type_label_fr,
+                          cluster_name: (poi.cluster_names || [])[0] || "Cluster inconnu",
+                        })
+                      }}
+                      className={cn(
+                        "w-full text-left rounded border px-2 py-1.5 hover:bg-stone-50",
+                        selectedRegionPoi?.rl_place_id === poi.rl_place_id
+                          ? "border-orange-300 bg-orange-50"
+                          : "border-stone-100"
+                      )}
+                    >
+                      <div className="text-xs text-stone-800">{decodeHtmlEntities(poi.name)}</div>
+                      <div className="text-[11px] text-stone-500">
+                        {decodeHtmlEntities(poi.place_type_label_fr || poi.place_type)} · {(poi.cluster_names || [])[0] || "Cluster inconnu"}
                       </div>
-                    </div>
+                    </button>
+                  ))}
+                  {!regionPois.isLoading && filteredRegionPois.length === 0 && (
+                    <div className="text-xs text-stone-500 p-1">Aucun POI trouvé avec ces filtres.</div>
                   )}
                 </div>
               </div>
+
+              <div className="space-y-2">
+                <div className="text-xs text-stone-500">Validation de la sélection</div>
+                {selectedRegionPoi ? (
+                  <div className="text-xs text-stone-700 rounded border border-stone-200 bg-stone-50 p-2">
+                    Sélectionné: {decodeHtmlEntities(selectedRegionPoi.name)} ·{" "}
+                    {decodeHtmlEntities(selectedRegionPoi.place_type_label_fr || selectedRegionPoi.place_type || "Type inconnu")} ·{" "}
+                    {decodeHtmlEntities(selectedRegionPoi.cluster_name || "Cluster inconnu")}
+                  </div>
+                ) : (
+                  <div className="text-xs text-stone-500 rounded border border-stone-200 bg-stone-50 p-2">
+                    Sélectionne un POI dans la liste pour le lier.
+                  </div>
+                )}
+                <button
+                  type="button"
+                  disabled={mutationPending || !selectedRegionPoi?.rl_place_id}
+                  onClick={() =>
+                    manualLink.mutate(
+                      {
+                        articleId: linkPanelRow.articleId,
+                        rlPlaceId: selectedRegionPoi?.rl_place_id || "",
+                        rlPlaceName: selectedRegionPoi?.name || undefined,
+                        placeType: selectedRegionPoi?.place_type,
+                        placeTypeLabelFr: selectedRegionPoi?.place_type_label_fr,
+                        clusterName: selectedRegionPoi?.cluster_name,
+                        candidateId: annuaireModalCandidate?.candidate_id || undefined,
+                        confidence: "high",
+                        score: 1,
+                        validated: true,
+                      },
+                      {
+                        onSuccess: () => {
+                          if (annuaireModalCandidate?.candidate_id && selectedRegionPoi?.rl_place_id) {
+                            applyLinkedCandidateInPanel({
+                              candidateId: annuaireModalCandidate.candidate_id,
+                              rlPlaceId: selectedRegionPoi.rl_place_id,
+                              rlPlaceName: selectedRegionPoi.name,
+                              placeType: selectedRegionPoi.place_type,
+                              placeTypeLabelFr: selectedRegionPoi.place_type_label_fr,
+                              clusterName: selectedRegionPoi.cluster_name,
+                            })
+                          }
+                          void backlog.refetch()
+                          pushLog(
+                            "success",
+                            `Liaison OK (${decodeHtmlEntities(linkPanelRow.title)}) -> ${selectedRegionPoi?.rl_place_id || ""}`
+                          )
+                          setAnnuaireModalCandidateId(null)
+                        },
+                        onError: (error) =>
+                          pushLog("error", `Erreur liaison manuelle (${decodeHtmlEntities(linkPanelRow.title)}): ${error.message}`),
+                      }
+                    )
+                  }
+                  className="inline-flex items-center gap-1.5 px-3 py-2 rounded-lg text-xs border border-stone-200 bg-white text-stone-700 hover:bg-stone-50 disabled:opacity-60"
+                >
+                  <Link2 className="h-3.5 w-3.5" />
+                  Valider et lier
+                </button>
+              </div>
+            </div>
           </div>
         </div>
       )}

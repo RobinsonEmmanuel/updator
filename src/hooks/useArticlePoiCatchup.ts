@@ -152,6 +152,14 @@ interface RecomputeCandidateResponse {
   candidate: PoiCandidateGroup
 }
 
+interface MarkCandidateResponse {
+  success: boolean
+  articleId: string
+  candidateId: string
+  suggestionsCount: number
+  candidate: PoiCandidateGroup
+}
+
 interface SiteCategory {
   id: number
   name: string
@@ -265,6 +273,30 @@ export function useArticlePoiRecomputeCandidate(siteId?: string) {
       })
       const data = (await res.json().catch(() => ({}))) as RecomputeCandidateResponse & { error?: string }
       if (!res.ok) throw new Error(data.error || "Failed to recompute candidate")
+      return data
+    },
+    onSuccess: () => {
+      if (siteId) queryClient.invalidateQueries({ queryKey: ["article-poi-backlog", siteId] })
+    },
+  })
+}
+
+export function useArticlePoiMarkCandidate(siteId?: string) {
+  const queryClient = useQueryClient()
+  return useMutation<
+    MarkCandidateResponse,
+    Error,
+    { articleId: string; candidateName: string; sectionTitle?: string; source?: "h1" | "h2" | "h3" | "title" | "body" | "fallback" }
+  >({
+    mutationFn: async ({ articleId, candidateName, sectionTitle, source = "body" }) => {
+      if (!siteId) throw new Error("No site selected")
+      const res = await ingestionFetch(ingestionApiUrl(`/api/v1/article-poi/${articleId}/candidate/mark`), {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ siteId, candidateName, sectionTitle, source }),
+      })
+      const data = (await res.json().catch(() => ({}))) as MarkCandidateResponse & { error?: string }
+      if (!res.ok) throw new Error(data.error || "Failed to mark candidate")
       return data
     },
     onSuccess: () => {

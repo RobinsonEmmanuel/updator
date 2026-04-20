@@ -6,6 +6,7 @@ import { useSiteContext } from "@/lib/SiteContext"
 import {
   useArticlePoiBacklog,
   useArticlePoiManualLink,
+  useArticlePoiMarkCandidate,
   useArticlePoiRecompute,
   useArticlePoiRecomputeArticle,
   useArticlePoiRecomputeCandidate,
@@ -51,6 +52,14 @@ interface CandidateSectionMeta {
   section_title?: string
   occurrences?: Array<{ section_title?: string }>
   suggestions?: unknown[]
+}
+
+interface ManualCandidateDraft {
+  name: string
+  sectionTitle: string
+  sectionId: string
+  anchorX: number
+  anchorY: number
 }
 
 function normalizeForMatch(input: string): string {
@@ -370,10 +379,10 @@ function highlightSectionHtmlByCandidates(
         mark.setAttribute("data-candidate-id", candidateId)
         mark.className =
           activeCandidateId === candidateId
-            ? "bg-orange-200 text-orange-900 rounded px-0.5 cursor-pointer"
-            : "bg-yellow-200 text-stone-900 rounded px-0.5 cursor-pointer"
+            ? "inline rounded px-0.5 cursor-pointer !bg-orange-300 !text-orange-950 ring-1 ring-orange-400 font-semibold"
+            : "inline rounded px-0.5 cursor-pointer !bg-yellow-200 !text-stone-900 ring-1 ring-yellow-300"
       } else {
-        mark.className = "bg-yellow-200 text-stone-900 rounded px-0.5"
+        mark.className = "inline rounded px-0.5 !bg-yellow-200 !text-stone-900 ring-1 ring-yellow-300"
       }
       frag.appendChild(mark)
       lastIndex = offset + match.length
@@ -478,6 +487,7 @@ export function PoiArticleCatchup() {
   const [expandedCandidateInfo, setExpandedCandidateInfo] = useState<Record<string, boolean>>({})
   const [scanModalOpen, setScanModalOpen] = useState(false)
   const [actionLogs, setActionLogs] = useState<ActionLogEntry[]>([])
+  const [manualCandidateDraft, setManualCandidateDraft] = useState<ManualCandidateDraft | null>(null)
 
   const backlog = useArticlePoiBacklog({
     siteId,
@@ -489,10 +499,11 @@ export function PoiArticleCatchup() {
   const recompute = useArticlePoiRecompute(siteId)
   const recomputeArticle = useArticlePoiRecomputeArticle(siteId)
   const recomputeCandidate = useArticlePoiRecomputeCandidate(siteId)
+  const markCandidate = useArticlePoiMarkCandidate(siteId)
   const manualLink = useArticlePoiManualLink(siteId)
   const unlinkPoi = useArticlePoiUnlink(siteId)
   const siteCategories = useSiteCategories(siteId)
-  const regionPois = useArticlePoiRegionPois({ siteId, q: regionPoiSearch, limit: 1000 })
+  const regionPois = useArticlePoiRegionPois({ siteId, limit: 1000 })
 
   const filteredRows = useMemo(() => {
     const rows = backlog.data?.data || []
@@ -552,22 +563,25 @@ export function PoiArticleCatchup() {
 
   const filteredRegionPois = useMemo(() => {
     const rows = regionPois.data || []
-    const q = regionPoiSearch.trim().toLowerCase()
+    const q = normalizeForMatch(regionPoiSearch)
     return rows.filter((poi) => {
-      const placeTypeLabel = decodeHtmlEntities(poi.place_type_label_fr || poi.place_type || "").toLowerCase()
+      const placeTypeLabel = decodeHtmlEntities(poi.place_type_label_fr || poi.place_type || "")
       const clusterNames = (poi.cluster_names || []).map((name) => decodeHtmlEntities(name))
       if (regionPoiClusterFilter && !clusterNames.includes(regionPoiClusterFilter)) return false
-      if (regionPoiTypeFilter && placeTypeLabel !== regionPoiTypeFilter.toLowerCase()) return false
+      if (regionPoiTypeFilter && placeTypeLabel.toLowerCase() !== regionPoiTypeFilter.toLowerCase()) return false
       if (!q) return true
       return (
-        decodeHtmlEntities(poi.name).toLowerCase().includes(q) ||
-        placeTypeLabel.includes(q) ||
-        decodeHtmlEntities(poi.place_type || "").toLowerCase().includes(q) ||
-        clusterNames.some((name) => name.toLowerCase().includes(q)) ||
-        poi.rl_place_id.toLowerCase().includes(q)
+        normalizeForMatch(decodeHtmlEntities(poi.name)).includes(q) ||
+        normalizeForMatch(placeTypeLabel).includes(q) ||
+        normalizeForMatch(decodeHtmlEntities(poi.place_type || "")).includes(q) ||
+        clusterNames.some((name) => normalizeForMatch(name).includes(q)) ||
+        normalizeForMatch(poi.rl_place_id).includes(q)
       )
     })
   }, [regionPois.data, regionPoiSearch, regionPoiClusterFilter, regionPoiTypeFilter])
+  const showRegionPoiSearchSpinner = regionPois.isLoading || regionPois.isFetching
+  const showRegionPoiLoadingPlaceholder =
+    (regionPois.isLoading || regionPois.isFetching) && filteredRegionPois.length === 0
   const regionPoiById = useMemo(() => {
     return new Map((regionPois.data || []).map((poi) => [poi.rl_place_id, poi]))
   }, [regionPois.data])
@@ -671,10 +685,12 @@ export function PoiArticleCatchup() {
     if (!linkPanelRow) {
       setOpenSectionIds([])
       setFocusedCandidateId(null)
+      setManualCandidateDraft(null)
       return
     }
     setOpenSectionIds([])
     setFocusedCandidateId(null)
+    setManualCandidateDraft(null)
   }, [linkPanelRow?.articleId, articleSections])
 
   useEffect(() => {
@@ -709,7 +725,8 @@ export function PoiArticleCatchup() {
     manualLink.isPending ||
     unlinkPoi.isPending ||
     recomputeArticle.isPending ||
-    recomputeCandidate.isPending
+    recomputeCandidate.isPending ||
+    markCandidate.isPending
 
   const pushLog = (level: ActionLogLevel, message: string) => {
     const entry: ActionLogEntry = {
@@ -736,6 +753,7 @@ export function PoiArticleCatchup() {
     setFocusedCandidateId(null)
     setAnnuaireModalCandidateId(null)
     setExpandedCandidateInfo({})
+    setManualCandidateDraft(null)
   }
 
   const closeLinkPanel = () => {
@@ -746,6 +764,7 @@ export function PoiArticleCatchup() {
     setFocusedCandidateId(null)
     setOpenSectionIds([])
     setImagePreviewSrc(null)
+    setManualCandidateDraft(null)
   }
 
   const applyLinkedCandidateInPanel = (params: {
@@ -930,6 +949,58 @@ export function PoiArticleCatchup() {
     )
   }
 
+  const handleSectionSelection = (sectionId: string, sectionTitle: string, event: MouseEvent<HTMLElement>) => {
+    const container = event.currentTarget as HTMLElement
+    const selection = window.getSelection()
+    const selectedText = selection?.toString().replace(/\s+/g, " ").trim() || ""
+    if (!selectedText || selectedText.length < 3) {
+      setManualCandidateDraft((prev) => (prev?.sectionId === sectionId ? null : prev))
+      return
+    }
+    const anchorNode = selection?.anchorNode
+    const isInsideSection = !!anchorNode && container.contains(anchorNode)
+    if (!isInsideSection) return
+    const range = selection?.rangeCount ? selection.getRangeAt(0) : null
+    const rect = range?.getBoundingClientRect()
+    const anchorX = rect ? rect.left + rect.width / 2 : event.clientX
+    const anchorY = rect ? rect.top : event.clientY
+    setManualCandidateDraft({
+      name: selectedText.slice(0, 90),
+      sectionId,
+      sectionTitle: decodeHtmlEntities(sectionTitle || "").trim(),
+      anchorX,
+      anchorY,
+    })
+  }
+
+  const markCandidateFromSelection = () => {
+    if (!linkPanelRow || !manualCandidateDraft) return
+    const candidateName = manualCandidateDraft.name.trim()
+    if (!candidateName) return
+    pushLog("info", `Marquage candidat: ${candidateName}`)
+    markCandidate.mutate(
+      {
+        articleId: linkPanelRow.articleId,
+        candidateName,
+        sectionTitle: manualCandidateDraft.sectionTitle,
+        source: "body",
+      },
+      {
+        onSuccess: (res) => {
+          applyRecomputedCandidateInPanel(res.candidateId, res.candidate)
+          setSelectedCandidateId(res.candidateId)
+          setFocusedCandidateId(res.candidateId)
+          setManualCandidateDraft(null)
+          void backlog.refetch()
+          pushLog("success", `Candidat marqué et scanné: ${candidateName} (${res.suggestionsCount} suggestion(s))`)
+        },
+        onError: (error) => {
+          pushLog("error", `Erreur marquage candidat (${candidateName}): ${error.message}`)
+        },
+      }
+    )
+  }
+
   const expandAllSections = () => {
     setOpenSectionIds(articleSections.map((section) => section.id))
   }
@@ -945,18 +1016,35 @@ export function PoiArticleCatchup() {
   const handleSectionContentClick = (sectionId: string, event: MouseEvent<HTMLElement>) => {
     const target = event.target as HTMLElement | null
     if (!target) return
+    const anchor = target.closest("a") as HTMLAnchorElement | null
     const image = target.closest("img[data-preview-src]") as HTMLImageElement | null
     const src = image?.getAttribute("data-preview-src")
     if (src) {
+      if (anchor) {
+        event.preventDefault()
+        event.stopPropagation()
+      }
       setImagePreviewSrc(src)
       return
     }
     const mark = target.closest("mark[data-candidate-id]") as HTMLElement | null
     const candidateId = mark?.getAttribute("data-candidate-id")
-    if (!candidateId) return
-    setFocusedCandidateId((prev) => (prev === candidateId ? null : candidateId))
-    setSelectedCandidateId(candidateId)
-    setOpenSectionIds((prev) => (prev.includes(sectionId) ? prev : [...prev, sectionId]))
+    if (candidateId) {
+      if (anchor) {
+        event.preventDefault()
+        event.stopPropagation()
+      }
+      const nextFocusedCandidateId = focusedCandidateId === candidateId ? null : candidateId
+      setFocusedCandidateId(nextFocusedCandidateId)
+      setSelectedCandidateId(candidateId)
+      setOpenSectionIds((prev) => (prev.includes(sectionId) ? prev : [...prev, sectionId]))
+      return
+    }
+    if (anchor) {
+      event.preventDefault()
+      event.stopPropagation()
+      return
+    }
   }
 
   return (
@@ -1351,8 +1439,8 @@ export function PoiArticleCatchup() {
                                     <span
                                       className={
                                         focusedCandidateId === titleCandidateId
-                                          ? "bg-orange-200 text-orange-900 rounded px-1"
-                                          : "bg-yellow-200 text-stone-900 rounded px-1"
+                                          ? "inline rounded px-1 !bg-orange-300 !text-orange-950 ring-1 ring-orange-400"
+                                          : "inline rounded px-1 !bg-yellow-200 !text-stone-900 ring-1 ring-yellow-300"
                                       }
                                     >
                                       {decodeHtmlEntities(section.title)}
@@ -1371,12 +1459,43 @@ export function PoiArticleCatchup() {
                               <div
                                 className="px-2.5 pb-2 prose prose-sm max-w-none"
                                 onClick={(event) => handleSectionContentClick(section.id, event)}
+                                onMouseUp={(event) => handleSectionSelection(section.id, section.title, event)}
                                 dangerouslySetInnerHTML={{ __html: highlightedHtml || "<p>Section vide.</p>" }}
                               />
                             ) : null}
                           </div>
                         )
                       })}
+                      {manualCandidateDraft ? (
+                        <div
+                          className="fixed z-50 -translate-x-1/2 -translate-y-full rounded-md border border-orange-300 bg-white shadow-lg px-2 py-1.5 flex items-center gap-2"
+                          style={{
+                            left: Math.max(120, Math.min(window.innerWidth - 120, manualCandidateDraft.anchorX)),
+                            top: Math.max(80, manualCandidateDraft.anchorY - 10),
+                          }}
+                        >
+                          <span className="text-[11px] text-stone-600 max-w-[260px] truncate" title={manualCandidateDraft.name}>
+                            "{manualCandidateDraft.name}"
+                          </span>
+                          <button
+                            type="button"
+                            onClick={markCandidateFromSelection}
+                            disabled={mutationPending}
+                            className="inline-flex items-center gap-1 rounded border border-orange-300 bg-orange-50 px-2 py-1 text-[11px] text-orange-800 hover:bg-orange-100 disabled:opacity-60"
+                          >
+                            <Sparkles className={cn("h-3.5 w-3.5", markCandidate.isPending && "animate-spin")} />
+                            Marquer + scanner RL
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => setManualCandidateDraft(null)}
+                            className="inline-flex items-center rounded border border-stone-200 bg-white px-1.5 py-1 text-[11px] text-stone-600 hover:bg-stone-50"
+                            aria-label="Fermer l'action de marquage"
+                          >
+                            <X className="h-3.5 w-3.5" />
+                          </button>
+                        </div>
+                      ) : null}
                     </div>
                   </div>
                 </div>
@@ -1447,7 +1566,18 @@ export function PoiArticleCatchup() {
                           <div className="flex items-center justify-between gap-2">
                             <button
                               type="button"
-                              onClick={() => setSelectedCandidateId(group.candidate_id)}
+                              onClick={() => {
+                                setSelectedCandidateId(group.candidate_id)
+                                setFocusedCandidateId(group.candidate_id)
+                                const candidateSectionIds = candidateSectionIdsMap.get(group.candidate_id) || []
+                                if (candidateSectionIds.length > 0) {
+                                  setOpenSectionIds((prev) => {
+                                    const merged = new Set(prev)
+                                    candidateSectionIds.forEach((id) => merged.add(id))
+                                    return Array.from(merged)
+                                  })
+                                }
+                              }}
                               className="text-left min-w-0 flex-1"
                             >
                               <div className="text-sm font-medium text-stone-800 break-words">
@@ -1744,12 +1874,17 @@ export function PoiArticleCatchup() {
             <div className="px-5 py-4 overflow-y-auto space-y-3">
               <div className="space-y-2">
                 <div className="text-xs text-stone-500">Moteur POI région (filtres)</div>
-                <input
-                  value={regionPoiSearch}
-                  onChange={(e) => setRegionPoiSearch(e.target.value)}
-                  placeholder="Recherche nom, ID, cluster, type"
-                  className="w-full px-3 py-2 rounded-lg border border-stone-200 text-sm"
-                />
+                <div className="relative">
+                  <input
+                    value={regionPoiSearch}
+                    onChange={(e) => setRegionPoiSearch(e.target.value)}
+                    placeholder="Recherche nom, ID, cluster, type"
+                    className="w-full px-3 py-2 pr-9 rounded-lg border border-stone-200 text-sm"
+                  />
+                  {showRegionPoiSearchSpinner ? (
+                    <Loader2 className="absolute right-3 top-1/2 -translate-y-1/2 h-4 w-4 text-stone-400 animate-spin" />
+                  ) : null}
+                </div>
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
                   <select
                     value={regionPoiClusterFilter}
@@ -1773,6 +1908,12 @@ export function PoiArticleCatchup() {
                   </select>
                 </div>
                 <div className="max-h-64 overflow-y-auto space-y-1 rounded-lg border border-stone-200 bg-white p-2">
+                  {showRegionPoiLoadingPlaceholder ? (
+                    <div className="flex items-center gap-2 text-xs text-stone-500 p-1">
+                      <Loader2 className="h-3.5 w-3.5 animate-spin text-stone-400" />
+                      Recherche des POI en cours...
+                    </div>
+                  ) : null}
                   {filteredRegionPois.map((poi) => (
                     <button
                       key={poi.rl_place_id}
@@ -1799,7 +1940,7 @@ export function PoiArticleCatchup() {
                       </div>
                     </button>
                   ))}
-                  {!regionPois.isLoading && filteredRegionPois.length === 0 && (
+                  {!showRegionPoiLoadingPlaceholder && filteredRegionPois.length === 0 && (
                     <div className="text-xs text-stone-500 p-1">Aucun POI trouvé avec ces filtres.</div>
                   )}
                 </div>

@@ -18,6 +18,7 @@ export {
   useArticlePoiRecompute,
   useArticlePoiRecomputeArticle,
   useArticlePoiRecomputeCandidate,
+  useArticlePoiMarkCandidate,
   useArticlePoiManualLink,
   useArticlePoiUnlink,
   useArticlePoiCreateRl,

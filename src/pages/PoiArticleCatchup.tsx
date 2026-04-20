@@ -1,6 +1,6 @@
-import { useEffect, useMemo, useRef, useState } from "react"
+import { useEffect, useMemo, useRef, useState, type MouseEvent } from "react"
 import { Link } from "react-router-dom"
-import { RefreshCw, Settings, Search, Link2, Sparkles, Loader2, PanelRight, X, Info } from "lucide-react"
+import { RefreshCw, Settings, Search, Link2, Sparkles, Loader2, PanelRight, X, Info, BookOpen, Trash2, ChevronDown, ArrowLeft } from "lucide-react"
 import { SiteCardsGrid } from "@/components/shared"
 import { useSiteContext } from "@/lib/SiteContext"
 import {
@@ -33,6 +33,35 @@ interface ActionLogEntry {
   message: string
 }
 
+interface ArticleSectionView {
+  id: string
+  title: string
+  level: "h1" | "h2" | "h3" | "intro"
+  html: string
+  text: string
+  candidateIds: string[]
+  suggestionCount: number
+}
+
+interface CandidateSectionMeta {
+  candidate_id: string
+  name: string
+  source?: string
+  section_title?: string
+  occurrences?: Array<{ section_title?: string }>
+  suggestions?: unknown[]
+}
+
+function normalizeForMatch(input: string): string {
+  return decodeHtmlEntities(input || "")
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .toLowerCase()
+    .replace(/[^a-z0-9\s-]/g, " ")
+    .replace(/\s+/g, " ")
+    .trim()
+}
+
 function decodeHtmlEntities(str: string): string {
   return str
     .replace(/&rsquo;|&#8217;|&#x2019;/g, "'")
@@ -50,13 +79,21 @@ function formatLogTime(iso: string): string {
   return Number.isNaN(d.getTime()) ? "—" : d.toLocaleTimeString("fr-FR")
 }
 
-function highlightHtmlByTerms(html: string, terms: string[]): string {
+function parseSectionsFromHtml(html: string, candidates: CandidateSectionMeta[]): ArticleSectionView[] {
   const source = html || ""
-  if (!source) return source
-  const tokens = Array.from(new Set(terms.map((t) => decodeHtmlEntities(t).trim()).filter((t) => t.length >= 3))).sort(
-    (a, b) => b.length - a.length
-  )
-  if (typeof window === "undefined" || typeof DOMParser === "undefined") return source
+  if (typeof window === "undefined" || typeof DOMParser === "undefined" || !source) {
+    return [
+      {
+        id: "intro",
+        title: "Contenu",
+        level: "intro",
+        html: source,
+        text: decodeHtmlEntities(source),
+        candidateIds: [],
+        suggestionCount: 0,
+      },
+    ]
+  }
 
   const parser = new DOMParser()
   const doc = parser.parseFromString(source, "text/html")
@@ -69,10 +106,169 @@ function highlightHtmlByTerms(html: string, terms: string[]): string {
     img.setAttribute("loading", "lazy")
   })
 
-  if (tokens.length === 0) return doc.body.innerHTML
-  const escaped = tokens.map((t) => t.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")).join("|")
-  if (!escaped) return doc.body.innerHTML
+  type RawSection = { id: string; title: string; level: "h1" | "h2" | "h3" | "intro"; nodes: Node[] }
+  const children = Array.from(doc.body.childNodes)
+  const headingEntries = children
+    .map((node, nodeIndex) => {
+      const el = node.nodeType === Node.ELEMENT_NODE ? (node as HTMLElement) : null
+      const tag = (el?.tagName || "").toLowerCase()
+      if (tag !== "h1" && tag !== "h2" && tag !== "h3") return null
+      const title = decodeHtmlEntities(el?.textContent || "").replace(/\s+/g, " ").trim()
+      if (!title) return null
+      return {
+        nodeIndex,
+        level: tag as "h1" | "h2" | "h3",
+        title,
+        normalizedTitle: normalizeForMatch(title),
+      }
+    })
+    .filter((entry): entry is { nodeIndex: number; level: "h1" | "h2" | "h3"; title: string; normalizedTitle: string } => !!entry)
 
+  const normalizedCandidates = candidates
+    .map((candidate) => ({ ...candidate, normalized: normalizeForMatch(candidate.name) }))
+    .filter((candidate) => candidate.normalized.length >= 3)
+
+  const extractSommaireTitles = (): string[] => {
+    const containers = Array.from(doc.body.querySelectorAll("div,section,aside,nav"))
+    for (const container of containers) {
+      const text = normalizeForMatch(container.textContent || "")
+      if (!text.includes("sommaire")) continue
+      const list = container.querySelector("ul,ol")
+      if (!list) continue
+      const titles = Array.from(list.querySelectorAll("li"))
+        .map((li) => decodeHtmlEntities(li.textContent || "").replace(/\s+/g, " ").trim())
+        .filter((t) => t.length > 0)
+      if (titles.length > 0) return titles
+    }
+    return []
+  }
+
+  const sommaireTitles = extractSommaireTitles()
+  const usedHeadingNodeIndexes = new Set<number>()
+  const sommaireAnchors = sommaireTitles
+    .map((title) => {
+      const normalizedTitle = normalizeForMatch(title)
+      if (!normalizedTitle) return null
+      const match = headingEntries.find((entry) => {
+        if (usedHeadingNodeIndexes.has(entry.nodeIndex)) return false
+        return (
+          entry.normalizedTitle === normalizedTitle ||
+          entry.normalizedTitle.includes(normalizedTitle) ||
+          normalizedTitle.includes(entry.normalizedTitle)
+        )
+      })
+      if (!match) return null
+      usedHeadingNodeIndexes.add(match.nodeIndex)
+      return {
+        nodeIndex: match.nodeIndex,
+        level: match.level,
+        title,
+      }
+    })
+    .filter((entry): entry is { nodeIndex: number; level: "h1" | "h2" | "h3"; title: string } => !!entry)
+    .sort((a, b) => a.nodeIndex - b.nodeIndex)
+
+  const fallbackAnchors = (() => {
+    if (sommaireAnchors.length > 0) return sommaireAnchors
+    const h2Only = headingEntries.filter((entry) => entry.level === "h2")
+    const selected = h2Only.length > 0 ? h2Only : headingEntries
+    return selected.map((entry) => ({
+      nodeIndex: entry.nodeIndex,
+      level: entry.level,
+      title: entry.title,
+    }))
+  })()
+
+  const sections: RawSection[] = []
+  if (fallbackAnchors.length === 0) {
+    sections.push({ id: "intro", title: "Introduction", level: "intro", nodes: children.map((node) => node.cloneNode(true)) })
+  } else {
+    const firstIndex = fallbackAnchors[0].nodeIndex
+    if (firstIndex > 0) {
+      sections.push({
+        id: "intro",
+        title: "Introduction",
+        level: "intro",
+        nodes: children.slice(0, firstIndex).map((node) => node.cloneNode(true)),
+      })
+    }
+    fallbackAnchors.forEach((anchor, idx) => {
+      const end = idx + 1 < fallbackAnchors.length ? fallbackAnchors[idx + 1].nodeIndex : children.length
+      const nodes = children.slice(anchor.nodeIndex, end).map((node) => node.cloneNode(true))
+      sections.push({
+        id: `section-${idx + 1}-${anchor.title.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "") || "heading"}`,
+        title: anchor.title,
+        level: anchor.level,
+        nodes,
+      })
+    })
+  }
+
+  const builtSections = sections
+    .map((section) => {
+      const tmp = doc.createElement("div")
+      section.nodes.forEach((node) => tmp.appendChild(node))
+      const htmlContent = tmp.innerHTML
+      const textContent = decodeHtmlEntities(tmp.textContent || "").replace(/\s+/g, " ").trim()
+      const normalizedText = normalizeForMatch(textContent)
+      const sectionTitleNormalized = normalizeForMatch(section.title)
+      const candidateIds = normalizedCandidates
+        .filter((candidate) => {
+          const titleMatches = [
+            candidate.section_title || "",
+            ...(Array.isArray(candidate.occurrences) ? candidate.occurrences.map((o) => o.section_title || "") : []),
+          ]
+            .map((t) => normalizeForMatch(t))
+            .filter((t) => t.length > 0)
+            .some((candidateSectionTitle) =>
+              candidateSectionTitle === sectionTitleNormalized ||
+              candidateSectionTitle.includes(sectionTitleNormalized) ||
+              sectionTitleNormalized.includes(candidateSectionTitle)
+            )
+          if (titleMatches) return true
+          return normalizedText.includes(candidate.normalized)
+        })
+        .map((candidate) => candidate.candidate_id)
+      const suggestionCount = candidates
+        .filter((candidate) => candidateIds.includes(candidate.candidate_id))
+        .reduce((acc, candidate) => acc + (Array.isArray(candidate.suggestions) ? candidate.suggestions.length : 0), 0)
+      return {
+        id: section.id,
+        title: section.title,
+        level: section.level,
+        html: htmlContent,
+        text: textContent,
+        candidateIds,
+        suggestionCount,
+      } satisfies ArticleSectionView
+    })
+    .filter((section) => section.html.trim().length > 0 || section.level !== "intro")
+  return builtSections
+}
+
+function highlightSectionHtmlByCandidates(
+  html: string,
+  candidates: Array<{ candidate_id: string; name: string }>,
+  activeCandidateId: string | null
+): string {
+  const source = html || ""
+  if (!source || typeof window === "undefined" || typeof DOMParser === "undefined") return source
+  const parser = new DOMParser()
+  const doc = parser.parseFromString(source, "text/html")
+
+  const entries = candidates
+    .map((candidate) => ({
+      candidateId: candidate.candidate_id,
+      label: decodeHtmlEntities(candidate.name).trim(),
+      lower: decodeHtmlEntities(candidate.name).trim().toLowerCase(),
+    }))
+    .filter((entry) => entry.label.length >= 3)
+    .sort((a, b) => b.label.length - a.label.length)
+
+  if (entries.length === 0) return doc.body.innerHTML
+  const escaped = entries.map((entry) => entry.label.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")).join("|")
+  if (!escaped) return doc.body.innerHTML
+  const byTerm = new Map(entries.map((entry) => [entry.lower, entry.candidateId]))
   const regex = new RegExp(`(${escaped})`, "gi")
   const walker = doc.createTreeWalker(doc.body, NodeFilter.SHOW_TEXT)
   const textNodes: Text[] = []
@@ -93,9 +289,18 @@ function highlightHtmlByTerms(html: string, terms: string[]): string {
     let lastIndex = 0
     textValue.replace(regex, (match, _group, offset) => {
       if (offset > lastIndex) frag.appendChild(doc.createTextNode(textValue.slice(lastIndex, offset)))
+      const candidateId = byTerm.get(match.toLowerCase())
       const mark = doc.createElement("mark")
-      mark.className = "bg-yellow-200 text-stone-900 rounded px-0.5"
       mark.textContent = match
+      if (candidateId) {
+        mark.setAttribute("data-candidate-id", candidateId)
+        mark.className =
+          activeCandidateId === candidateId
+            ? "bg-orange-200 text-orange-900 rounded px-0.5 cursor-pointer"
+            : "bg-yellow-200 text-stone-900 rounded px-0.5 cursor-pointer"
+      } else {
+        mark.className = "bg-yellow-200 text-stone-900 rounded px-0.5"
+      }
       frag.appendChild(mark)
       lastIndex = offset + match.length
       return match
@@ -148,6 +353,8 @@ export function PoiArticleCatchup() {
   } | null>(null)
   const [imagePreviewSrc, setImagePreviewSrc] = useState<string | null>(null)
   const [selectedCandidateId, setSelectedCandidateId] = useState<string | null>(null)
+  const [focusedCandidateId, setFocusedCandidateId] = useState<string | null>(null)
+  const [openSectionIds, setOpenSectionIds] = useState<string[]>([])
   const [annuaireModalCandidateId, setAnnuaireModalCandidateId] = useState<string | null>(null)
   const [unlinkConfirmCandidateId, setUnlinkConfirmCandidateId] = useState<string | null>(null)
   const [expandedCandidateInfo, setExpandedCandidateInfo] = useState<Record<string, boolean>>({})
@@ -193,14 +400,6 @@ export function PoiArticleCatchup() {
   const selectedCandidate = useMemo(
     () => panelCandidateGroups.find((g) => g.candidate_id === selectedCandidateId) || panelCandidateGroups[0],
     [panelCandidateGroups, selectedCandidateId]
-  )
-  const linkedPanelCandidateGroups = useMemo(
-    () => panelCandidateGroups.filter((group) => !!group.rl_place_id),
-    [panelCandidateGroups]
-  )
-  const unlinkedPanelCandidateGroups = useMemo(
-    () => panelCandidateGroups.filter((group) => !group.rl_place_id),
-    [panelCandidateGroups]
   )
   const annuaireModalCandidate = useMemo(
     () => panelCandidateGroups.find((g) => g.candidate_id === annuaireModalCandidateId) || null,
@@ -285,13 +484,42 @@ export function PoiArticleCatchup() {
       ...extra,
     })
   }
-  const candidateHighlightTerms = useMemo(
-    () => panelCandidateGroups.map((group) => group.name).filter((name) => (name || "").trim().length > 0),
-    [panelCandidateGroups]
+  const articleSections = useMemo(() => {
+    const html = linkPanelRow?.htmlCleaned || linkPanelRow?.htmlBrut || ""
+    return parseSectionsFromHtml(html, panelCandidateGroups)
+  }, [linkPanelRow?.htmlCleaned, linkPanelRow?.htmlBrut, panelCandidateGroups])
+  const candidateSectionIdsMap = useMemo(() => {
+    const map = new Map<string, string[]>()
+    articleSections.forEach((section) => {
+      section.candidateIds.forEach((candidateId) => {
+        const prev = map.get(candidateId) || []
+        if (!prev.includes(section.id)) map.set(candidateId, [...prev, section.id])
+      })
+    })
+    return map
+  }, [articleSections])
+  const openSectionCandidateIds = useMemo(() => {
+    const openSet = new Set(openSectionIds)
+    const ids = new Set<string>()
+    articleSections.forEach((section) => {
+      if (!openSet.has(section.id)) return
+      section.candidateIds.forEach((candidateId) => ids.add(candidateId))
+    })
+    return ids
+  }, [articleSections, openSectionIds])
+  const visiblePanelCandidateGroups = useMemo(() => {
+    if (focusedCandidateId) {
+      return panelCandidateGroups.filter((group) => group.candidate_id === focusedCandidateId)
+    }
+    return panelCandidateGroups.filter((group) => openSectionCandidateIds.has(group.candidate_id))
+  }, [panelCandidateGroups, focusedCandidateId, openSectionCandidateIds])
+  const linkedPanelCandidateGroups = useMemo(
+    () => visiblePanelCandidateGroups.filter((group) => !!group.rl_place_id),
+    [visiblePanelCandidateGroups]
   )
-  const highlightedArticleHtml = useMemo(
-    () => highlightHtmlByTerms(linkPanelRow?.htmlCleaned || linkPanelRow?.htmlBrut || "", candidateHighlightTerms),
-    [linkPanelRow?.htmlCleaned, linkPanelRow?.htmlBrut, candidateHighlightTerms]
+  const unlinkedPanelCandidateGroups = useMemo(
+    () => visiblePanelCandidateGroups.filter((group) => !group.rl_place_id),
+    [visiblePanelCandidateGroups]
   )
   const isDetailView = Boolean(linkPanelRow)
 
@@ -319,6 +547,27 @@ export function PoiArticleCatchup() {
     }
     // If current filtered page no longer contains the article, keep panel as-is.
   }, [backlog.data?.data, linkPanelRow?.articleId, selectedCandidateId])
+
+  useEffect(() => {
+    if (!linkPanelRow) {
+      setOpenSectionIds([])
+      setFocusedCandidateId(null)
+      return
+    }
+    setOpenSectionIds([])
+    setFocusedCandidateId(null)
+  }, [linkPanelRow?.articleId, articleSections])
+
+  useEffect(() => {
+    if (!focusedCandidateId) return
+    const sectionIds = candidateSectionIdsMap.get(focusedCandidateId) || []
+    if (sectionIds.length === 0) return
+    setOpenSectionIds((prev) => {
+      const merged = new Set(prev)
+      sectionIds.forEach((id) => merged.add(id))
+      return Array.from(merged)
+    })
+  }, [focusedCandidateId, candidateSectionIdsMap])
 
   if (hasNoSites) return <NoSitesMessage />
 
@@ -360,6 +609,7 @@ export function PoiArticleCatchup() {
     setRegionPoiClusterFilter("")
     setRegionPoiTypeFilter("")
     setSelectedRegionPoi(null)
+    setFocusedCandidateId(null)
     setAnnuaireModalCandidateId(null)
     setExpandedCandidateInfo({})
   }
@@ -369,6 +619,8 @@ export function PoiArticleCatchup() {
     setSelectedRegionPoi(null)
     setAnnuaireModalCandidateId(null)
     setUnlinkConfirmCandidateId(null)
+    setFocusedCandidateId(null)
+    setOpenSectionIds([])
     setImagePreviewSrc(null)
   }
 
@@ -494,29 +746,42 @@ export function PoiArticleCatchup() {
     )
   }
 
+  const toggleSection = (sectionId: string) => {
+    setOpenSectionIds((prev) => (prev.includes(sectionId) ? prev.filter((id) => id !== sectionId) : [...prev, sectionId]))
+  }
+
+  const handleSectionContentClick = (sectionId: string, event: MouseEvent<HTMLElement>) => {
+    const target = event.target as HTMLElement | null
+    if (!target) return
+    const image = target.closest("img[data-preview-src]") as HTMLImageElement | null
+    const src = image?.getAttribute("data-preview-src")
+    if (src) {
+      setImagePreviewSrc(src)
+      return
+    }
+    const mark = target.closest("mark[data-candidate-id]") as HTMLElement | null
+    const candidateId = mark?.getAttribute("data-candidate-id")
+    if (!candidateId) return
+    setFocusedCandidateId((prev) => (prev === candidateId ? null : candidateId))
+    setSelectedCandidateId(candidateId)
+    setOpenSectionIds((prev) => (prev.includes(sectionId) ? prev : [...prev, sectionId]))
+  }
+
   return (
     <div className="p-8 max-w-[1400px] mx-auto space-y-6">
       <div className="flex flex-wrap items-center justify-between gap-3">
-        <div>
-          <h1 className="text-xl font-semibold text-stone-800 flex items-center gap-2">
-            <Sparkles className="h-5 w-5 text-orange-500" />
-            {isDetailView ? "Détail liaison POI/article" : "Studio Match POI"}
-          </h1>
-          <p className="text-sm text-stone-500 mt-1">
-            {isDetailView && linkPanelRow
-              ? `${selectedSite.name} · Article en cours: ${decodeHtmlEntities(linkPanelRow.title)}`
-              : `${selectedSite.name} · articles, suggestions RL, liaisons validées`}
-          </p>
-        </div>
-        {isDetailView ? (
-          <button
-            type="button"
-            onClick={closeLinkPanel}
-            className="inline-flex items-center gap-2 px-4 py-2 rounded-lg border border-stone-200 bg-white text-sm font-medium text-stone-700 hover:bg-stone-50"
-          >
-            Retour à la liste
-          </button>
+        {!isDetailView ? (
+          <div>
+            <h1 className="text-xl font-semibold text-stone-800 flex items-center gap-2">
+              <Sparkles className="h-5 w-5 text-orange-500" />
+              Studio Match POI
+            </h1>
+            <p className="text-sm text-stone-500 mt-1">{`${selectedSite.name} · articles, suggestions RL, liaisons validées`}</p>
+          </div>
         ) : (
+          <div />
+        )}
+        {!isDetailView ? (
           <button
             type="button"
             onClick={handleScanSite}
@@ -526,7 +791,7 @@ export function PoiArticleCatchup() {
             <RefreshCw className={cn("h-4 w-4", recompute.isPending && "animate-spin")} />
             Scanner tout le site
           </button>
-        )}
+        ) : null}
       </div>
 
       {!isDetailView && recompute.data?.summary && (
@@ -782,8 +1047,8 @@ export function PoiArticleCatchup() {
       ) : null}
 
       {linkPanelRow && (
-        <div className="rounded-xl border border-stone-200 bg-white shadow-sm overflow-hidden">
-          <div className="sticky top-0 z-10 px-5 py-4 border-b border-stone-200 bg-white flex items-start justify-between gap-3">
+        <div className="bg-transparent">
+          <div className="sticky top-0 z-10 px-0 py-2 bg-stone-50/85 backdrop-blur-sm flex items-start justify-between gap-3">
               <div>
                 <h3 className="text-base font-semibold text-stone-800">Espace de liaison POI</h3>
                 <p className="text-xs text-stone-500 mt-1">{decodeHtmlEntities(linkPanelRow.title)}</p>
@@ -815,19 +1080,21 @@ export function PoiArticleCatchup() {
                 <button
                   type="button"
                   onClick={closeLinkPanel}
-                  className="p-1.5 rounded border border-stone-200 text-stone-600 hover:bg-stone-50"
-                  aria-label="Fermer le panneau"
+                  className="inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded border border-orange-200 bg-orange-50 text-orange-700 hover:bg-orange-100 text-xs"
+                  aria-label="Retour à la liste"
+                  title="Retour à la liste"
                 >
-                  <X className="h-4 w-4" />
+                  <ArrowLeft className="h-3.5 w-3.5" />
+                  Retour à la liste
                 </button>
               </div>
           </div>
 
-          <div className="p-5">
-              <div className="grid grid-cols-1 xl:grid-cols-12 gap-4">
-                <div className="xl:col-span-8 space-y-3">
-                  <div className="rounded-lg border border-stone-200 bg-white p-3">
-                    <div className="text-xs text-stone-500">Article complet (références candidats surlignées)</div>
+          <div className="p-0">
+              <div className="grid grid-cols-1 xl:grid-cols-12 gap-3">
+                <div className="xl:col-span-8 space-y-2">
+                  <div className="bg-white p-2.5 rounded-lg">
+                    <div className="text-xs text-stone-500">Article complet (sections H1/H2/H3, candidats surlignés cliquables)</div>
                     <div className="text-sm font-medium text-stone-800 mt-1">{decodeHtmlEntities(linkPanelRow.title)}</div>
                     {linkPanelRow.articleUrl ? (
                       <a
@@ -839,25 +1106,56 @@ export function PoiArticleCatchup() {
                         Ouvrir l’article source
                       </a>
                     ) : null}
-                    <div className="mt-2 max-h-[75vh] overflow-y-auto rounded border border-stone-100 bg-stone-50 p-3 prose prose-sm max-w-none">
-                      <div
-                        onClick={(event) => {
-                          const target = event.target as HTMLElement | null
-                          if (!target) return
-                          const image = target.closest("img[data-preview-src]") as HTMLImageElement | null
-                          const src = image?.getAttribute("data-preview-src")
-                          if (src) setImagePreviewSrc(src)
-                        }}
-                        dangerouslySetInnerHTML={{ __html: highlightedArticleHtml || linkPanelRow.htmlBrut || "<p>Aucun contenu article.</p>" }}
-                      />
+                    {focusedCandidateId ? (
+                      <div className="mt-2 text-[11px] rounded border border-orange-200 bg-orange-50 text-orange-800 px-2 py-1 inline-flex items-center gap-2">
+                        Filtre candidat actif
+                        <button
+                          type="button"
+                          onClick={() => setFocusedCandidateId(null)}
+                          className="inline-flex items-center rounded border border-orange-200 bg-stone-50 px-1.5 py-0.5 hover:bg-orange-100"
+                        >
+                          Réinitialiser
+                        </button>
+                      </div>
+                    ) : null}
+                    <div className="mt-2 max-h-[75vh] overflow-y-auto rounded-md bg-white p-2 space-y-1.5">
+                      {articleSections.map((section) => {
+                        const isOpen = openSectionIds.includes(section.id)
+                        const sectionCandidates = panelCandidateGroups.filter((group) => section.candidateIds.includes(group.candidate_id))
+                        const highlightedHtml = highlightSectionHtmlByCandidates(section.html, sectionCandidates, focusedCandidateId)
+                        return (
+                          <div key={section.id} className="rounded border border-stone-200/80 bg-white overflow-hidden">
+                            <button
+                              type="button"
+                              onClick={() => toggleSection(section.id)}
+                              className="w-full flex items-center justify-between gap-2 px-2.5 py-1.5 text-left hover:bg-stone-50"
+                            >
+                              <div className="min-w-0">
+                                <div className="text-sm font-medium text-stone-800 truncate">{decodeHtmlEntities(section.title)}</div>
+                                <div className="text-[11px] text-stone-500">
+                                  {section.candidateIds.length} candidat(s) · {section.suggestionCount} suggestion(s)
+                                </div>
+                              </div>
+                              <ChevronDown className={cn("h-4 w-4 text-stone-500 transition-transform", isOpen && "rotate-180")} />
+                            </button>
+                            {isOpen ? (
+                              <div
+                                className="px-2.5 pb-2 prose prose-sm max-w-none"
+                                onClick={(event) => handleSectionContentClick(section.id, event)}
+                                dangerouslySetInnerHTML={{ __html: highlightedHtml || "<p>Section vide.</p>" }}
+                              />
+                            ) : null}
+                          </div>
+                        )
+                      })}
                     </div>
                   </div>
                 </div>
 
-                <div className="xl:col-span-4 space-y-3">
-                  <div className="space-y-3 max-h-[72vh] overflow-y-auto pr-1">
+                <div className="xl:col-span-4 space-y-2">
+                  <div className="space-y-2 max-h-[72vh] overflow-y-auto pr-0.5">
                     {linkedPanelCandidateGroups.length > 0 ? (
-                      <div className="text-[11px] font-medium uppercase tracking-wide text-emerald-700 bg-emerald-50 border border-emerald-200 rounded px-2 py-1">
+                      <div className="text-[11px] font-medium uppercase tracking-wide text-emerald-700 bg-emerald-50/70 border border-emerald-200 rounded px-2 py-1">
                         POI déjà liés ({linkedPanelCandidateGroups.length})
                       </div>
                     ) : null}
@@ -903,13 +1201,13 @@ export function PoiArticleCatchup() {
                       return (
                         <div key={group.candidate_id} className="space-y-2">
                           {showUnlinkedHeader ? (
-                            <div className="text-[11px] font-medium uppercase tracking-wide text-stone-500 bg-stone-50 border border-stone-200 rounded px-2 py-1">
+                            <div className="text-[11px] font-medium uppercase tracking-wide text-stone-500 bg-stone-50/80 border border-stone-200 rounded px-2 py-1">
                               Candidats à valider ({unlinkedPanelCandidateGroups.length})
                             </div>
                           ) : null}
                         <div
                           className={cn(
-                            "rounded-xl border p-3",
+                            "relative rounded-lg border p-2.5 pr-24",
                             isLinkedCandidate
                               ? "border-emerald-200 bg-emerald-50/30"
                               : active
@@ -939,7 +1237,7 @@ export function PoiArticleCatchup() {
                                 </div>
                               ) : null}
                             </button>
-                            <div className="flex items-center gap-1.5">
+                            <div className="absolute top-2 right-2 flex items-center gap-1.5">
                               <button
                                 type="button"
                                 onClick={() =>
@@ -948,10 +1246,11 @@ export function PoiArticleCatchup() {
                                     [group.candidate_id]: !expanded,
                                   }))
                                 }
-                                className="inline-flex items-center gap-1 text-xs px-2 py-1 rounded border border-stone-200 text-stone-600 hover:bg-stone-50"
+                                className="inline-flex items-center justify-center h-8 w-8 rounded border border-stone-200 text-stone-600 hover:bg-stone-50"
+                                title="Voir les infos du candidat"
+                                aria-label="Voir les infos du candidat"
                               >
-                                <Info className="h-3.5 w-3.5" />
-                                Infos
+                                <Info className="h-4 w-4" />
                               </button>
                               {!isLinkedCandidate ? (
                                 <button
@@ -961,9 +1260,11 @@ export function PoiArticleCatchup() {
                                     setAnnuaireModalCandidateId(group.candidate_id)
                                     setSelectedRegionPoi(null)
                                   }}
-                                  className="inline-flex items-center gap-1 text-xs px-2 py-1 rounded border border-orange-200 bg-orange-50 text-orange-700 hover:bg-orange-100"
+                                  className="inline-flex items-center justify-center h-8 w-8 rounded border border-orange-200 bg-orange-50 text-orange-700 hover:bg-orange-100"
+                                  title="Ouvrir l'annuaire RL"
+                                  aria-label="Ouvrir l'annuaire RL"
                                 >
-                                  Annuaire RL
+                                  <BookOpen className="h-4 w-4" />
                                 </button>
                               ) : null}
                               {isLinkedCandidate ? (
@@ -976,10 +1277,11 @@ export function PoiArticleCatchup() {
                                       )
                                     }
                                     disabled={mutationPending}
-                                    className="inline-flex items-center gap-1 text-xs px-2 py-1 rounded border border-red-300 bg-red-50 text-red-700 hover:bg-red-100 disabled:opacity-60"
+                                    className="inline-flex items-center justify-center h-8 w-8 rounded border border-red-300 bg-red-50 text-red-700 hover:bg-red-100 disabled:opacity-60"
                                     title="Retirer la liaison RL de ce candidat"
+                                    aria-label="Retirer la liaison RL de ce candidat"
                                   >
-                                    Retirer lien RL
+                                    <Trash2 className="h-4 w-4" />
                                   </button>
                                   {unlinkConfirmCandidateId === group.candidate_id ? (
                                     <div className="absolute right-0 mt-1 z-20 w-56 rounded-md border border-red-200 bg-white shadow-sm p-2 text-[11px] text-stone-700">
@@ -1153,6 +1455,11 @@ export function PoiArticleCatchup() {
                         </div>
                       )
                     })}
+                    {visiblePanelCandidateGroups.length === 0 ? (
+                      <div className="rounded-lg border border-stone-200 bg-stone-50 p-3 text-xs text-stone-500">
+                        Aucun candidat visible. Ouvre une section H1/H2/H3 dans l’article pour afficher les candidats/POI correspondants.
+                      </div>
+                    ) : null}
                   </div>
                 </div>
               </div>

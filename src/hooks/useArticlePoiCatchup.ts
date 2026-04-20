@@ -85,6 +85,7 @@ export interface ArticlePoiBacklogRow {
   hasLinkedPoi?: boolean
   articleUrl: string | null
   htmlBrut: string
+  htmlCleaned?: string
 }
 
 interface BacklogResponse {

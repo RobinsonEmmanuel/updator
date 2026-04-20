@@ -49,6 +49,63 @@ function formatLogTime(iso: string): string {
   return Number.isNaN(d.getTime()) ? "—" : d.toLocaleTimeString("fr-FR")
 }
 
+function highlightHtmlByTerms(html: string, terms: string[]): string {
+  const source = html || ""
+  if (!source) return source
+  const tokens = Array.from(new Set(terms.map((t) => decodeHtmlEntities(t).trim()).filter((t) => t.length >= 3))).sort(
+    (a, b) => b.length - a.length
+  )
+  if (typeof window === "undefined" || typeof DOMParser === "undefined") return source
+
+  const parser = new DOMParser()
+  const doc = parser.parseFromString(source, "text/html")
+
+  doc.body.querySelectorAll("img").forEach((img) => {
+    const src = img.getAttribute("src") || ""
+    if (!src) return
+    img.setAttribute("data-preview-src", src)
+    img.setAttribute("style", "max-width:200px;width:100%;height:auto;cursor:zoom-in;display:block;margin:8px 0;")
+    img.setAttribute("loading", "lazy")
+  })
+
+  if (tokens.length === 0) return doc.body.innerHTML
+  const escaped = tokens.map((t) => t.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")).join("|")
+  if (!escaped) return doc.body.innerHTML
+
+  const regex = new RegExp(`(${escaped})`, "gi")
+  const walker = doc.createTreeWalker(doc.body, NodeFilter.SHOW_TEXT)
+  const textNodes: Text[] = []
+  let node = walker.nextNode()
+  while (node) {
+    textNodes.push(node as Text)
+    node = walker.nextNode()
+  }
+
+  textNodes.forEach((textNode) => {
+    const parentTag = textNode.parentElement?.tagName.toLowerCase()
+    if (parentTag === "script" || parentTag === "style" || parentTag === "noscript" || parentTag === "mark") return
+    const textValue = textNode.nodeValue || ""
+    if (!textValue || !regex.test(textValue)) return
+
+    regex.lastIndex = 0
+    const frag = doc.createDocumentFragment()
+    let lastIndex = 0
+    textValue.replace(regex, (match, _group, offset) => {
+      if (offset > lastIndex) frag.appendChild(doc.createTextNode(textValue.slice(lastIndex, offset)))
+      const mark = doc.createElement("mark")
+      mark.className = "bg-yellow-200 text-stone-900 rounded px-0.5"
+      mark.textContent = match
+      frag.appendChild(mark)
+      lastIndex = offset + match.length
+      return match
+    })
+    if (lastIndex < textValue.length) frag.appendChild(doc.createTextNode(textValue.slice(lastIndex)))
+    textNode.parentNode?.replaceChild(frag, textNode)
+  })
+
+  return doc.body.innerHTML
+}
+
 function NoSitesMessage() {
   return (
     <div className="p-8 max-w-2xl mx-auto">
@@ -80,10 +137,15 @@ export function PoiArticleCatchup() {
   const [regionPoiSearch, setRegionPoiSearch] = useState("")
   const [regionPoiClusterFilter, setRegionPoiClusterFilter] = useState("")
   const [regionPoiTypeFilter, setRegionPoiTypeFilter] = useState("")
-  const [manualPanelPlaceId, setManualPanelPlaceId] = useState("")
-  const [manualPanelPlaceName, setManualPanelPlaceName] = useState("")
+  const [selectedRegionPoi, setSelectedRegionPoi] = useState<{
+    rl_place_id: string
+    name: string
+    confidenceScore?: number
+  } | null>(null)
+  const [imagePreviewSrc, setImagePreviewSrc] = useState<string | null>(null)
   const [selectedCandidateId, setSelectedCandidateId] = useState<string | null>(null)
   const [expandedCandidateInfo, setExpandedCandidateInfo] = useState<Record<string, boolean>>({})
+  const [detailRightTab, setDetailRightTab] = useState<"matching" | "directory">("matching")
   const [scanModalOpen, setScanModalOpen] = useState(false)
   const [actionLogs, setActionLogs] = useState<ActionLogEntry[]>([])
 
@@ -170,6 +232,15 @@ export function PoiArticleCatchup() {
       )
     })
   }, [regionPois.data, regionPoiSearch, regionPoiClusterFilter, regionPoiTypeFilter])
+  const candidateHighlightTerms = useMemo(
+    () => panelCandidateGroups.map((group) => group.name).filter((name) => (name || "").trim().length > 0),
+    [panelCandidateGroups]
+  )
+  const highlightedArticleHtml = useMemo(
+    () => highlightHtmlByTerms(linkPanelRow?.htmlCleaned || linkPanelRow?.htmlBrut || "", candidateHighlightTerms),
+    [linkPanelRow?.htmlCleaned, linkPanelRow?.htmlBrut, candidateHighlightTerms]
+  )
+  const isDetailView = Boolean(linkPanelRow)
 
   useEffect(() => {
     if (!linkPanelRow) return
@@ -216,16 +287,18 @@ export function PoiArticleCatchup() {
       groups[0]?.candidate_id ||
       null
     setSelectedCandidateId(initialCandidateId)
-    setManualPanelPlaceId("")
-    setManualPanelPlaceName("")
     setRegionPoiSearch("")
     setRegionPoiClusterFilter("")
     setRegionPoiTypeFilter("")
+    setDetailRightTab("matching")
+    setSelectedRegionPoi(null)
     setExpandedCandidateInfo({})
   }
 
   const closeLinkPanel = () => {
     setLinkPanelRow(null)
+    setSelectedRegionPoi(null)
+    setImagePreviewSrc(null)
   }
 
   const handleScanSite = () => {
@@ -247,37 +320,68 @@ export function PoiArticleCatchup() {
     )
   }
 
+  const triggerRecomputeArticle = (row: ArticlePoiBacklogRow) => {
+    const displayTitle = decodeHtmlEntities(row.title)
+    pushLog("info", `Relance article lancée: ${displayTitle}`)
+    recomputeArticle.mutate(
+      { articleId: row.articleId, force: true },
+      {
+        onSuccess: (res) => {
+          pushLog(
+            "success",
+            `Relance article terminée (${displayTitle}): ${res.result}, refresh=${res.refreshed ? "ok" : "non"}, ${res.rlPlacesLoaded} POI RL`
+          )
+        },
+        onError: (error) => {
+          pushLog("error", `Relance article en erreur (${displayTitle}): ${error.message}`)
+        },
+      }
+    )
+  }
+
   return (
     <div className="p-8 max-w-[1400px] mx-auto space-y-6">
       <div className="flex flex-wrap items-center justify-between gap-3">
         <div>
           <h1 className="text-xl font-semibold text-stone-800 flex items-center gap-2">
             <Sparkles className="h-5 w-5 text-orange-500" />
-            Studio Match POI
+            {isDetailView ? "Détail liaison POI/article" : "Studio Match POI"}
           </h1>
           <p className="text-sm text-stone-500 mt-1">
-            {selectedSite.name} · articles, suggestions RL, liaisons validées
+            {isDetailView && linkPanelRow
+              ? `${selectedSite.name} · Article en cours: ${decodeHtmlEntities(linkPanelRow.title)}`
+              : `${selectedSite.name} · articles, suggestions RL, liaisons validées`}
           </p>
         </div>
-        <button
-          type="button"
-          onClick={handleScanSite}
-          disabled={recompute.isPending}
-          className="inline-flex items-center gap-2 px-4 py-2 rounded-lg bg-orange-500 text-white text-sm font-medium hover:bg-orange-600 disabled:opacity-60"
-        >
-          <RefreshCw className={cn("h-4 w-4", recompute.isPending && "animate-spin")} />
-          Scanner tout le site
-        </button>
+        {isDetailView ? (
+          <button
+            type="button"
+            onClick={closeLinkPanel}
+            className="inline-flex items-center gap-2 px-4 py-2 rounded-lg border border-stone-200 bg-white text-sm font-medium text-stone-700 hover:bg-stone-50"
+          >
+            Retour à la liste
+          </button>
+        ) : (
+          <button
+            type="button"
+            onClick={handleScanSite}
+            disabled={recompute.isPending}
+            className="inline-flex items-center gap-2 px-4 py-2 rounded-lg bg-orange-500 text-white text-sm font-medium hover:bg-orange-600 disabled:opacity-60"
+          >
+            <RefreshCw className={cn("h-4 w-4", recompute.isPending && "animate-spin")} />
+            Scanner tout le site
+          </button>
+        )}
       </div>
 
-      {recompute.data?.summary && (
+      {!isDetailView && recompute.data?.summary && (
         <div className="rounded-xl border border-teal-200 bg-teal-50 p-3 text-sm text-teal-800">
           Scan terminé · {recompute.data.summary.refreshed} contenus refresh WP · {recompute.data.summary.updated} matching recalculés ·{" "}
           {recompute.data.summary.needsReview} à revue
         </div>
       )}
 
-      <div className="grid grid-cols-1 md:grid-cols-4 gap-3">
+      {!isDetailView && <div className="grid grid-cols-1 md:grid-cols-4 gap-3">
         <div className="rounded-lg border border-stone-200 bg-white p-3">
           <div className="text-xs text-stone-500">Articles backlog</div>
           <div className="text-lg font-semibold text-stone-800">{backlog.data?.total ?? 0}</div>
@@ -294,9 +398,9 @@ export function PoiArticleCatchup() {
           <div className="text-xs text-stone-500">Candidats détectés</div>
           <div className="text-lg font-semibold text-stone-800">{backlog.data?.summary?.detectedCandidates ?? 0}</div>
         </div>
-      </div>
+      </div>}
 
-      <div className="flex flex-wrap gap-2">
+      {!isDetailView && <div className="flex flex-wrap gap-2">
         <button
           type="button"
           onClick={() => setStatus(undefined)}
@@ -317,9 +421,9 @@ export function PoiArticleCatchup() {
             {STATUS_LABELS[key]} ({backlog.data?.summary?.[key] || 0})
           </button>
         ))}
-      </div>
+      </div>}
 
-      <div className="flex flex-wrap gap-2">
+      {!isDetailView && <div className="flex flex-wrap gap-2">
         <button
           type="button"
           onClick={() => setLinkState("all")}
@@ -341,9 +445,9 @@ export function PoiArticleCatchup() {
         >
           Sans POI lié
         </button>
-      </div>
+      </div>}
 
-      <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+      {!isDetailView && <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
         <div className="md:col-span-2">
           <div className="relative">
             <Search className="h-4 w-4 absolute left-3 top-1/2 -translate-y-1/2 text-stone-400" />
@@ -367,9 +471,9 @@ export function PoiArticleCatchup() {
             </option>
           ))}
         </select>
-      </div>
+      </div>}
 
-      {actionLogs.length > 0 && (
+      {!isDetailView && actionLogs.length > 0 && (
         <div className="rounded-xl border border-stone-200 bg-white/80 p-3">
           <h3 className="text-sm font-medium text-stone-700 mb-2">Journal d’actions</h3>
           <div className="space-y-1 max-h-44 overflow-auto">
@@ -393,13 +497,13 @@ export function PoiArticleCatchup() {
         </div>
       )}
 
-      {backlog.error && (
+      {!isDetailView && backlog.error && (
         <div className="rounded-xl border border-red-200 bg-red-50 p-3 text-sm text-red-700">
           {(backlog.error as Error).message}
         </div>
       )}
 
-      {backlog.isLoading ? (
+      {!isDetailView && backlog.isLoading ? (
         <div className="text-sm text-stone-500">Chargement du backlog…</div>
       ) : !linkPanelRow ? (
         <div className="bg-white/80 rounded-xl border border-stone-200 overflow-x-auto">
@@ -477,21 +581,7 @@ export function PoiArticleCatchup() {
                         <button
                           type="button"
                           onClick={() => {
-                            pushLog("info", `Relance article lancée: ${displayTitle}`)
-                            recomputeArticle.mutate(
-                              { articleId: row.articleId, force: true },
-                              {
-                                onSuccess: (res) => {
-                                  pushLog(
-                                    "success",
-                                    `Relance article terminée (${displayTitle}): ${res.result}, refresh=${res.refreshed ? "ok" : "non"}, ${res.rlPlacesLoaded} POI RL`
-                                  )
-                                },
-                                onError: (error) => {
-                                  pushLog("error", `Relance article en erreur (${displayTitle}): ${error.message}`)
-                                },
-                              }
-                            )
+                            triggerRecomputeArticle(row)
                           }}
                           disabled={mutationPending}
                           className="inline-flex items-center justify-center h-8 w-8 rounded-lg text-xs border border-stone-200 text-stone-700 bg-white hover:bg-stone-50 disabled:opacity-60"
@@ -527,234 +617,315 @@ export function PoiArticleCatchup() {
               <div>
                 <h3 className="text-base font-semibold text-stone-800">Espace de liaison POI</h3>
                 <p className="text-xs text-stone-500 mt-1">{decodeHtmlEntities(linkPanelRow.title)}</p>
+                <div className="mt-2 flex flex-wrap gap-1.5">
+                  {(linkPanelRow.categories || []).length > 0 ? (
+                    linkPanelRow.categories.map((cat) => (
+                      <span key={cat} className="inline-flex items-center rounded-full border border-stone-200 bg-stone-50 px-2 py-0.5 text-[11px] text-stone-600">
+                        {decodeHtmlEntities(cat)}
+                      </span>
+                    ))
+                  ) : (
+                    <span className="inline-flex items-center rounded-full border border-stone-200 bg-stone-50 px-2 py-0.5 text-[11px] text-stone-500">
+                      Sans catégorie
+                    </span>
+                  )}
+                </div>
               </div>
-              <button
-                type="button"
-                onClick={closeLinkPanel}
-                className="p-1.5 rounded border border-stone-200 text-stone-600 hover:bg-stone-50"
-                aria-label="Fermer le panneau"
-              >
-                <X className="h-4 w-4" />
-              </button>
+              <div className="flex items-center gap-2">
+                <button
+                  type="button"
+                  onClick={() => triggerRecomputeArticle(linkPanelRow)}
+                  disabled={mutationPending}
+                  className="inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded border border-stone-200 text-stone-700 hover:bg-stone-50 disabled:opacity-60 text-xs"
+                  title="Relancer scan POI article (avec vérification WP)"
+                >
+                  <RefreshCw className={cn("h-3.5 w-3.5", recomputeArticle.isPending && "animate-spin")} />
+                  Relancer scan article
+                </button>
+                <button
+                  type="button"
+                  onClick={closeLinkPanel}
+                  className="p-1.5 rounded border border-stone-200 text-stone-600 hover:bg-stone-50"
+                  aria-label="Fermer le panneau"
+                >
+                  <X className="h-4 w-4" />
+                </button>
+              </div>
           </div>
 
           <div className="p-5">
               <div className="grid grid-cols-1 xl:grid-cols-12 gap-4">
-                <div className="xl:col-span-7 space-y-4">
-                  <div className="rounded-lg border border-stone-200 bg-stone-50 p-3">
-                    <div className="text-xs text-stone-500">Candidat sélectionné</div>
-                    <div className="text-sm text-stone-800 mt-1">{selectedCandidate ? decodeHtmlEntities(selectedCandidate.name) : "Aucun candidat détecté"}</div>
-                    {selectedCandidate && (
-                      <div className="text-xs text-stone-500 mt-1">
-                        Score candidat: {Math.round((selectedCandidate.mention_score || 0) * 100)}%
-                      </div>
-                    )}
-                  </div>
-
-                  <div className="space-y-2">
-                    <div className="text-xs text-stone-500">Candidats détectés</div>
-                    <div className="space-y-2 max-h-56 overflow-y-auto">
-                      {panelCandidateGroups.map((group) => {
-                        const active = selectedCandidate?.candidate_id === group.candidate_id
-                        const expanded = !!expandedCandidateInfo[group.candidate_id]
-                        return (
-                          <div
-                            key={group.candidate_id}
-                            className={cn(
-                              "w-full rounded-lg border p-2",
-                              active ? "border-orange-300 bg-orange-50" : "border-stone-200 bg-white"
-                            )}
-                          >
-                            <div className="flex items-center justify-between gap-2">
-                              <button
-                                type="button"
-                                onClick={() => setSelectedCandidateId(group.candidate_id)}
-                                className="text-left min-w-0 flex-1"
-                              >
-                                <div className="text-sm text-stone-800 truncate">{decodeHtmlEntities(group.name)}</div>
-                                <div className="text-xs text-stone-500 mt-0.5">
-                                  Score {Math.round((group.mention_score || 0) * 100)}%
-                                </div>
-                              </button>
-                              <button
-                                type="button"
-                                onClick={() =>
-                                  setExpandedCandidateInfo((prev) => ({
-                                    ...prev,
-                                    [group.candidate_id]: !expanded,
-                                  }))
-                                }
-                                className="inline-flex items-center gap-1 text-xs px-2 py-1 rounded border border-stone-200 text-stone-600 hover:bg-stone-50"
-                              >
-                                <Info className="h-3.5 w-3.5" />
-                                Infos
-                              </button>
-                            </div>
-                            {expanded && (
-                              <div className="mt-2 text-xs text-stone-600 space-y-1">
-                                <div><strong>Source:</strong> {group.source}</div>
-                                <div><strong>Occurrences (freq):</strong> {group.frequency}</div>
-                                <div><strong>Hits titres (h):</strong> {group.heading_hits} sur H1/H2/H3</div>
-                                <div><strong>Suggestions RL (sugg):</strong> {group.suggestions.length}</div>
-                              </div>
-                            )}
-                          </div>
-                        )
-                      })}
+                <div className="xl:col-span-8 space-y-3">
+                  <div className="rounded-lg border border-stone-200 bg-white p-3">
+                    <div className="text-xs text-stone-500">Article complet (références candidats surlignées)</div>
+                    <div className="text-sm font-medium text-stone-800 mt-1">{decodeHtmlEntities(linkPanelRow.title)}</div>
+                    {linkPanelRow.articleUrl ? (
+                      <a
+                        href={linkPanelRow.articleUrl}
+                        target="_blank"
+                        rel="noreferrer"
+                        className="text-xs text-orange-700 underline underline-offset-2"
+                      >
+                        Ouvrir l’article source
+                      </a>
+                    ) : null}
+                    <div className="mt-2 max-h-[75vh] overflow-y-auto rounded border border-stone-100 bg-stone-50 p-3 prose prose-sm max-w-none">
+                      <div
+                        onClick={(event) => {
+                          const target = event.target as HTMLElement | null
+                          if (!target) return
+                          const image = target.closest("img[data-preview-src]") as HTMLImageElement | null
+                          const src = image?.getAttribute("data-preview-src")
+                          if (src) setImagePreviewSrc(src)
+                        }}
+                        dangerouslySetInnerHTML={{ __html: highlightedArticleHtml || linkPanelRow.htmlBrut || "<p>Aucun contenu article.</p>" }}
+                      />
                     </div>
-                  </div>
-
-                  <div className="space-y-2">
-                    <div className="text-xs text-stone-500">Suggestions RL vérifiables ({selectedCandidate?.suggestions?.length || 0})</div>
-                    {selectedCandidate?.suggestions?.length ? (
-                      <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
-                        {selectedCandidate.suggestions.slice(0, 8).map((s) => (
-                          <div key={s.rl_place_id} className="rounded-lg border border-stone-200 bg-white p-2">
-                            <div className="text-sm font-medium text-stone-800 truncate">{decodeHtmlEntities(s.name)}</div>
-                            <div className="text-xs text-stone-500 mt-0.5">
-                              {decodeHtmlEntities(s.place_type_label_fr || s.place_type)}
-                            </div>
-                            <div className="text-xs text-stone-500 mt-0.5">
-                              Score: {Math.round(s.score * 100)}% · ID: <span className="font-mono">{s.rl_place_id}</span>
-                            </div>
-                            <div className="text-xs text-stone-500 mt-0.5">
-                              Cluster: {decodeHtmlEntities(s.cluster_name || s.cluster_id || "—")}
-                            </div>
-                            <button
-                              type="button"
-                              disabled={mutationPending}
-                              onClick={() =>
-                                manualLink.mutate(
-                                  {
-                                    articleId: linkPanelRow.articleId,
-                                    rlPlaceId: s.rl_place_id,
-                                    rlPlaceName: s.name,
-                                    candidateId: selectedCandidate?.candidate_id,
-                                    confidence: s.confidence,
-                                    score: s.score,
-                                    validated: true,
-                                  },
-                                  {
-                                    onSuccess: () => pushLog("success", `POI lié (${decodeHtmlEntities(linkPanelRow.title)}) -> ${decodeHtmlEntities(s.name)}`),
-                                    onError: (error) => pushLog("error", `Erreur liaison suggestion (${decodeHtmlEntities(linkPanelRow.title)}): ${error.message}`),
-                                  }
-                                )
-                              }
-                              className="mt-2 inline-flex items-center gap-1.5 px-2 py-1.5 rounded text-xs bg-orange-500 text-white hover:bg-orange-600 disabled:opacity-60"
-                            >
-                              <Link2 className="h-3.5 w-3.5" />
-                              Lier ce POI
-                            </button>
-                          </div>
-                        ))}
-                      </div>
-                    ) : (
-                      <div className="text-xs text-stone-500 rounded-lg border border-stone-200 bg-stone-50 p-2">
-                        Aucune suggestion RL disponible pour ce candidat.
-                      </div>
-                    )}
                   </div>
                 </div>
 
-                <div className="xl:col-span-5 space-y-4">
-                  <div className="space-y-2">
-                    <div className="text-xs text-stone-500">Moteur POI région (filtres)</div>
-                    <input
-                      value={regionPoiSearch}
-                      onChange={(e) => setRegionPoiSearch(e.target.value)}
-                      placeholder="Recherche nom, ID, cluster, type"
-                      className="w-full px-3 py-2 rounded-lg border border-stone-200 text-sm"
-                    />
-                    <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
-                      <select
-                        value={regionPoiClusterFilter}
-                        onChange={(e) => setRegionPoiClusterFilter(e.target.value)}
-                        className="w-full px-3 py-2 rounded-lg border border-stone-200 text-sm bg-white"
-                      >
-                        <option value="">Tous les clusters</option>
-                        {availableClusterNames.map((name) => (
-                          <option key={name} value={name}>{name}</option>
-                        ))}
-                      </select>
-                      <select
-                        value={regionPoiTypeFilter}
-                        onChange={(e) => setRegionPoiTypeFilter(e.target.value)}
-                        className="w-full px-3 py-2 rounded-lg border border-stone-200 text-sm bg-white"
-                      >
-                        <option value="">Toutes les catégories</option>
-                        {availableTypeLabels.map((label) => (
-                          <option key={label} value={label}>{label}</option>
-                        ))}
-                      </select>
-                    </div>
-                    <div className="max-h-60 overflow-y-auto space-y-1 rounded-lg border border-stone-200 bg-white p-2">
-                      {filteredRegionPois.map((poi) => (
-                        <button
-                          key={poi.rl_place_id}
-                          type="button"
-                          onClick={() => {
-                            setManualPanelPlaceId(poi.rl_place_id)
-                            setManualPanelPlaceName(poi.name)
-                          }}
-                          className="w-full text-left rounded border border-stone-100 px-2 py-1.5 hover:bg-stone-50"
-                        >
-                          <div className="text-xs text-stone-800">{decodeHtmlEntities(poi.name)}</div>
-                          <div className="text-[11px] text-stone-500">
-                            {decodeHtmlEntities(poi.place_type_label_fr || poi.place_type)} · {(poi.cluster_names || [])[0] || "Cluster inconnu"}
-                          </div>
-                          <div className="text-[11px] text-stone-500 font-mono">{poi.rl_place_id}</div>
-                        </button>
-                      ))}
-                      {!regionPois.isLoading && filteredRegionPois.length === 0 && (
-                        <div className="text-xs text-stone-500 p-1">Aucun POI trouvé avec ces filtres.</div>
-                      )}
-                    </div>
-                  </div>
-
-                  <div className="space-y-2">
-                    <div className="text-xs text-stone-500">Liaison manuelle via ID RL</div>
-                    <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
-                      <input
-                        value={manualPanelPlaceId}
-                        onChange={(e) => setManualPanelPlaceId(e.target.value)}
-                        placeholder="rl_place_id"
-                        className="px-3 py-2 rounded-lg border border-stone-200 text-sm"
-                      />
-                      <input
-                        value={manualPanelPlaceName}
-                        onChange={(e) => setManualPanelPlaceName(e.target.value)}
-                        placeholder="Nom (optionnel)"
-                        className="px-3 py-2 rounded-lg border border-stone-200 text-sm"
-                      />
-                    </div>
+                <div className="xl:col-span-4 space-y-3">
+                  <div className="inline-flex rounded-lg border border-stone-200 bg-white p-1">
                     <button
                       type="button"
-                      disabled={mutationPending || !manualPanelPlaceId.trim()}
-                      onClick={() =>
-                        manualLink.mutate(
-                          {
-                            articleId: linkPanelRow.articleId,
-                            rlPlaceId: manualPanelPlaceId.trim(),
-                            rlPlaceName: manualPanelPlaceName.trim() || undefined,
-                            candidateId: selectedCandidate?.candidate_id || undefined,
-                            confidence: "high",
-                            score: 1,
-                            validated: true,
-                          },
-                          {
-                            onSuccess: () => pushLog("success", `Liaison manuelle OK (${decodeHtmlEntities(linkPanelRow.title)}) -> ${manualPanelPlaceId.trim()}`),
-                            onError: (error) => pushLog("error", `Erreur liaison manuelle (${decodeHtmlEntities(linkPanelRow.title)}): ${error.message}`),
-                          }
-                        )
-                      }
-                      className="inline-flex items-center gap-1.5 px-3 py-2 rounded-lg text-xs border border-stone-200 bg-white text-stone-700 hover:bg-stone-50 disabled:opacity-60"
+                      onClick={() => setDetailRightTab("matching")}
+                      className={cn(
+                        "px-3 py-1.5 text-xs rounded-md",
+                        detailRightTab === "matching" ? "bg-orange-100 text-orange-800" : "text-stone-600 hover:bg-stone-50"
+                      )}
                     >
-                      <Link2 className="h-3.5 w-3.5" />
-                      Lier ID RL
+                      Rapprochement
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setDetailRightTab("directory")}
+                      className={cn(
+                        "px-3 py-1.5 text-xs rounded-md",
+                        detailRightTab === "directory" ? "bg-orange-100 text-orange-800" : "text-stone-600 hover:bg-stone-50"
+                      )}
+                    >
+                      Annuaire RL
                     </button>
                   </div>
+
+                  {detailRightTab === "matching" ? (
+                    <div className="space-y-3">
+                      <div className="rounded-lg border border-stone-200 bg-stone-50 p-3">
+                        <div className="text-xs text-stone-500">Candidat sélectionné</div>
+                        <div className="text-sm text-stone-800 mt-1">{selectedCandidate ? decodeHtmlEntities(selectedCandidate.name) : "Aucun candidat détecté"}</div>
+                        {selectedCandidate && (
+                          <div className="text-xs text-stone-500 mt-1">Score candidat: {Math.round((selectedCandidate.mention_score || 0) * 100)}%</div>
+                        )}
+                      </div>
+
+                      <div className="space-y-2">
+                        <div className="text-xs text-stone-500">Détecté dans le texte</div>
+                        <div className="space-y-2 max-h-56 overflow-y-auto">
+                          {panelCandidateGroups.map((group) => {
+                            const active = selectedCandidate?.candidate_id === group.candidate_id
+                            const expanded = !!expandedCandidateInfo[group.candidate_id]
+                            return (
+                              <div
+                                key={group.candidate_id}
+                                className={cn(
+                                  "w-full rounded-lg border p-2",
+                                  active ? "border-orange-300 bg-orange-50" : "border-stone-200 bg-white"
+                                )}
+                              >
+                                <div className="flex items-center justify-between gap-2">
+                                  <button
+                                    type="button"
+                                    onClick={() => setSelectedCandidateId(group.candidate_id)}
+                                    className="text-left min-w-0 flex-1"
+                                  >
+                                    <div className="text-sm text-stone-800 truncate">{decodeHtmlEntities(group.name)}</div>
+                                    <div className="text-xs text-stone-500 mt-0.5">
+                                      Score {Math.round((group.mention_score || 0) * 100)}%
+                                    </div>
+                                  </button>
+                                  <button
+                                    type="button"
+                                    onClick={() =>
+                                      setExpandedCandidateInfo((prev) => ({
+                                        ...prev,
+                                        [group.candidate_id]: !expanded,
+                                      }))
+                                    }
+                                    className="inline-flex items-center gap-1 text-xs px-2 py-1 rounded border border-stone-200 text-stone-600 hover:bg-stone-50"
+                                  >
+                                    <Info className="h-3.5 w-3.5" />
+                                    Infos
+                                  </button>
+                                </div>
+                                {expanded && (
+                                  <div className="mt-2 text-xs text-stone-600 space-y-1">
+                                    <div><strong>Source:</strong> {group.source}</div>
+                                    <div><strong>Occurrences (freq):</strong> {group.frequency}</div>
+                                    <div><strong>Hits titres (h):</strong> {group.heading_hits} sur H1/H2/H3</div>
+                                    <div><strong>Suggestions RL (sugg):</strong> {group.suggestions.length}</div>
+                                  </div>
+                                )}
+                              </div>
+                            )
+                          })}
+                        </div>
+                      </div>
+
+                      <div className="space-y-2">
+                        <div className="text-xs text-stone-500">Rapprochement RL ({selectedCandidate?.suggestions?.length || 0})</div>
+                        {selectedCandidate?.suggestions?.length ? (
+                          <div className="space-y-2 max-h-64 overflow-y-auto">
+                            {selectedCandidate.suggestions.slice(0, 8).map((s) => (
+                              <div key={s.rl_place_id} className="rounded-lg border border-stone-200 bg-white p-2">
+                                <div className="text-sm font-medium text-stone-800 truncate">{decodeHtmlEntities(s.name)}</div>
+                                <div className="text-xs text-stone-500 mt-0.5">
+                                  {decodeHtmlEntities(s.place_type_label_fr || s.place_type)} · {Math.round(s.score * 100)}%
+                                </div>
+                              </div>
+                            ))}
+                          </div>
+                        ) : (
+                          <div className="text-xs text-stone-500 rounded-lg border border-stone-200 bg-stone-50 p-2">
+                            Aucune suggestion RL disponible pour ce candidat.
+                          </div>
+                        )}
+                      </div>
+                    </div>
+                  ) : (
+                    <div className="space-y-3">
+                      <div className="space-y-2">
+                        <div className="text-xs text-stone-500">Moteur POI région (filtres)</div>
+                        <input
+                          value={regionPoiSearch}
+                          onChange={(e) => setRegionPoiSearch(e.target.value)}
+                          placeholder="Recherche nom, ID, cluster, type"
+                          className="w-full px-3 py-2 rounded-lg border border-stone-200 text-sm"
+                        />
+                        <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
+                          <select
+                            value={regionPoiClusterFilter}
+                            onChange={(e) => setRegionPoiClusterFilter(e.target.value)}
+                            className="w-full px-3 py-2 rounded-lg border border-stone-200 text-sm bg-white"
+                          >
+                            <option value="">Tous les clusters</option>
+                            {availableClusterNames.map((name) => (
+                              <option key={name} value={name}>{name}</option>
+                            ))}
+                          </select>
+                          <select
+                            value={regionPoiTypeFilter}
+                            onChange={(e) => setRegionPoiTypeFilter(e.target.value)}
+                            className="w-full px-3 py-2 rounded-lg border border-stone-200 text-sm bg-white"
+                          >
+                            <option value="">Toutes les catégories</option>
+                            {availableTypeLabels.map((label) => (
+                              <option key={label} value={label}>{label}</option>
+                            ))}
+                          </select>
+                        </div>
+                        <div className="max-h-60 overflow-y-auto space-y-1 rounded-lg border border-stone-200 bg-white p-2">
+                          {filteredRegionPois.map((poi) => (
+                            <button
+                              key={poi.rl_place_id}
+                              type="button"
+                              onClick={() => {
+                                setSelectedRegionPoi({
+                                  rl_place_id: poi.rl_place_id,
+                                  name: poi.name,
+                                })
+                              }}
+                              className={cn(
+                                "w-full text-left rounded border px-2 py-1.5 hover:bg-stone-50",
+                                selectedRegionPoi?.rl_place_id === poi.rl_place_id
+                                  ? "border-orange-300 bg-orange-50"
+                                  : "border-stone-100"
+                              )}
+                            >
+                              <div className="text-xs text-stone-800">{decodeHtmlEntities(poi.name)}</div>
+                              <div className="text-[11px] text-stone-500">
+                                {decodeHtmlEntities(poi.place_type_label_fr || poi.place_type)} · {(poi.cluster_names || [])[0] || "Cluster inconnu"}
+                              </div>
+                              <div className="text-[11px] text-stone-500 font-mono">{poi.rl_place_id}</div>
+                            </button>
+                          ))}
+                          {!regionPois.isLoading && filteredRegionPois.length === 0 && (
+                            <div className="text-xs text-stone-500 p-1">Aucun POI trouvé avec ces filtres.</div>
+                          )}
+                        </div>
+                      </div>
+
+                      <div className="space-y-2">
+                        <div className="text-xs text-stone-500">Validation de la sélection</div>
+                        {selectedRegionPoi ? (
+                          <div className="text-xs text-stone-700 rounded border border-stone-200 bg-stone-50 p-2">
+                            Sélectionné: {decodeHtmlEntities(selectedRegionPoi.name)} ·{" "}
+                            <span className="font-mono">{selectedRegionPoi.rl_place_id}</span>
+                          </div>
+                        ) : (
+                          <div className="text-xs text-stone-500 rounded border border-stone-200 bg-stone-50 p-2">
+                            Sélectionne un POI dans la liste pour le lier.
+                          </div>
+                        )}
+                        <button
+                          type="button"
+                          disabled={mutationPending || !selectedRegionPoi?.rl_place_id}
+                          onClick={() =>
+                            manualLink.mutate(
+                              {
+                                articleId: linkPanelRow.articleId,
+                                rlPlaceId: selectedRegionPoi?.rl_place_id || "",
+                                rlPlaceName: selectedRegionPoi?.name || undefined,
+                                candidateId: selectedCandidate?.candidate_id || undefined,
+                                confidence: "high",
+                                score: 1,
+                                validated: true,
+                              },
+                              {
+                                onSuccess: () =>
+                                  pushLog(
+                                    "success",
+                                    `Liaison OK (${decodeHtmlEntities(linkPanelRow.title)}) -> ${selectedRegionPoi?.rl_place_id || ""}`
+                                  ),
+                                onError: (error) => pushLog("error", `Erreur liaison manuelle (${decodeHtmlEntities(linkPanelRow.title)}): ${error.message}`),
+                              }
+                            )
+                          }
+                          className="inline-flex items-center gap-1.5 px-3 py-2 rounded-lg text-xs border border-stone-200 bg-white text-stone-700 hover:bg-stone-50 disabled:opacity-60"
+                        >
+                          <Link2 className="h-3.5 w-3.5" />
+                          Valider et lier
+                        </button>
+                      </div>
+                    </div>
+                  )}
                 </div>
               </div>
+          </div>
+        </div>
+      )}
+
+      {imagePreviewSrc && (
+        <div
+          className="fixed inset-0 z-50 bg-black/70 flex items-center justify-center p-4"
+          onClick={() => setImagePreviewSrc(null)}
+        >
+          <div
+            className="relative max-w-[90vw] max-h-[90vh] bg-white rounded-lg overflow-hidden shadow-2xl"
+            onClick={(event) => event.stopPropagation()}
+          >
+            <button
+              type="button"
+              onClick={() => setImagePreviewSrc(null)}
+              className="absolute top-2 right-2 inline-flex items-center justify-center h-8 w-8 rounded bg-black/60 text-white hover:bg-black/75"
+              aria-label="Fermer aperçu image"
+            >
+              <X className="h-4 w-4" />
+            </button>
+            <img
+              src={imagePreviewSrc}
+              alt="Aperçu"
+              className="block max-w-[90vw] max-h-[90vh] object-contain bg-white"
+            />
           </div>
         </div>
       )}

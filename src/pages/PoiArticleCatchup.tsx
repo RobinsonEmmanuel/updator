@@ -923,12 +923,13 @@ export function PoiArticleCatchup() {
             },
             {
               onSuccess: (result) => {
-                if (result.createdRlPlaceId && !result.duplicate_link_prevented) {
+                const createdLinkId = result.createdRlPlaceInstanceId || result.createdRlPlaceId
+                if (createdLinkId && !result.duplicate_link_prevented) {
                   const createdTypeLabel =
                     placeTypeLabelByType.get(createPoiType.trim().toLowerCase()) || createPoiType.trim()
                   applyLinkedCandidateInPanel({
                     candidateId: annuaireModalCandidate.candidate_id,
-                    rlPlaceId: result.createdRlPlaceId,
+                    rlPlaceId: createdLinkId,
                     rlPlaceName: createPoiName.trim(),
                     placeType: createPoiType.trim(),
                     placeTypeLabelFr: createdTypeLabel,

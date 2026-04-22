@@ -636,20 +636,30 @@ export function useArticlePoiCreateRl(siteId?: string) {
         success?: boolean
         articleId?: string
         createdRlPlaceId?: string
+        createdRlPlaceInstanceId?: string
         duplicate_link_prevented?: boolean
         existingCandidateId?: string
         error?: string
         status?: number
         details?: unknown
         rl_write_target?: string
+        rl_read_target?: string
       }
       if (!res.ok) {
-        const detailMessage =
-          typeof data.details === "string"
-            ? data.details
-            : data.details && typeof data.details === "object"
-              ? JSON.stringify(data.details)
-              : ""
+        const detailMessage = (() => {
+          if (!data.details) return ""
+          if (typeof data.details === "string") return data.details
+          if (typeof data.details === "object" && data.details !== null) {
+            const detailsRecord = data.details as Record<string, unknown>
+            const messages = detailsRecord.message
+            if (Array.isArray(messages)) {
+              const first = messages.find((entry) => typeof entry === "string")
+              if (typeof first === "string") return first
+            }
+            if (typeof detailsRecord.error === "string") return detailsRecord.error
+          }
+          return ""
+        })()
         const statusMessage = typeof data.status === "number" ? ` (RL ${data.status})` : ""
         const suffix = detailMessage ? `: ${detailMessage}` : ""
         throw new Error(`${data.error || "Failed to create RL place"}${statusMessage}${suffix}`)
@@ -658,7 +668,9 @@ export function useArticlePoiCreateRl(siteId?: string) {
         success: !!data.success,
         articleId: data.articleId || payload.articleId,
         createdRlPlaceId: data.createdRlPlaceId,
+        createdRlPlaceInstanceId: data.createdRlPlaceInstanceId,
         rl_write_target: data.rl_write_target,
+        rl_read_target: data.rl_read_target,
         duplicate_link_prevented: data.duplicate_link_prevented === true,
         existingCandidateId: data.existingCandidateId,
       } satisfies CreateRlResponse

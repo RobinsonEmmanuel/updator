@@ -945,7 +945,7 @@ export function PoiArticleCatchup() {
                 void backlog.refetch()
                 pushLog(
                   "success",
-                  `POI créé et lié (${decodeHtmlEntities(linkPanelRow.title)}) -> ${result.createdRlPlaceId || "N/A"}`
+                  `POI créé et lié (${decodeHtmlEntities(linkPanelRow.title)}) -> _id: ${result.createdRlPlaceId || "N/A"} · place_instance_id: ${result.createdRlPlaceInstanceId || "N/A"}`
                 )
                 setAnnuaireModalCandidateId(null)
                 setCreatePoiName("")

@@ -2,6 +2,7 @@ import { useMemo, useRef, useState } from "react"
 import {
   useArticlePoiBacklog,
   useArticlePoiManualLink,
+  useArticlePoiCreateRl,
   useArticlePoiMarkCandidate,
   useArticlePoiRecompute,
   useArticlePoiRecomputeArticle,
@@ -47,6 +48,7 @@ export function usePoiArticleCatchupController({ siteId }: ControllerParams) {
   const recomputeCandidate = useArticlePoiRecomputeCandidate(siteId)
   const markCandidate = useArticlePoiMarkCandidate(siteId)
   const manualLink = useArticlePoiManualLink(siteId)
+  const createRl = useArticlePoiCreateRl(siteId)
   const unlinkPoi = useArticlePoiUnlink(siteId)
   const removeCandidate = useArticlePoiRemoveCandidate(siteId)
   const siteCategories = useSiteCategories(siteId)
@@ -98,6 +100,7 @@ export function usePoiArticleCatchupController({ siteId }: ControllerParams) {
   const mutationPending =
     recompute.isPending ||
     manualLink.isPending ||
+    createRl.isPending ||
     unlinkPoi.isPending ||
     setScanValidation.isPending ||
     removeCandidate.isPending ||
@@ -171,6 +174,7 @@ export function usePoiArticleCatchupController({ siteId }: ControllerParams) {
     recomputeCandidate,
     markCandidate,
     manualLink,
+    createRl,
     unlinkPoi,
     removeCandidate,
     siteCategories,

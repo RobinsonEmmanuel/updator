@@ -54,9 +54,10 @@ export function buildRegionPoiMap(regionPois: RegionPoiLite[]): Map<string, Regi
 }
 
 export function computeReportingStats(rows: ArticlePoiBacklogRow[]) {
-  const articlesMatchedToDirectory = rows.filter((row) =>
-    (row.detectedCandidates || []).some((candidate) => !!candidate.rl_place_id)
-  ).length
+  const articlesMatchedToDirectory = rows.filter((row) => {
+    if (!row.poiScanValidated) return false
+    return (row.detectedCandidates || []).some((candidate) => !!candidate.rl_place_id)
+  }).length
   const uniqueLinkedRlPoiCount = new Set(
     rows.flatMap((row) =>
       (row.detectedCandidates || [])

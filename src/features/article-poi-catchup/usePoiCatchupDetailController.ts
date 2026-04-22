@@ -38,6 +38,9 @@ export function usePoiCatchupDetailController() {
   const [expandedCandidateInfo, setExpandedCandidateInfo] = useState<Record<string, boolean>>({})
   const [manualCandidateDraft, setManualCandidateDraft] = useState<ManualCandidateDraft | null>(null)
   const [recomputeCandidateInFlightId, setRecomputeCandidateInFlightId] = useState<string | null>(null)
+  const [createPoiName, setCreatePoiName] = useState("")
+  const [createPoiType, setCreatePoiType] = useState("")
+  const [createPoiClusterId, setCreatePoiClusterId] = useState("")
 
   const openLinkPanel = (row: ArticlePoiBacklogRow) => {
     setLinkPanelRow(row)
@@ -53,6 +56,9 @@ export function usePoiCatchupDetailController() {
     setUnlinkConfirmCandidateId(null)
     setRemoveConfirmCandidateId(null)
     setManualCandidateDraft(null)
+    setCreatePoiName("")
+    setCreatePoiType("")
+    setCreatePoiClusterId("")
   }
 
   const closeLinkPanel = () => {
@@ -65,6 +71,9 @@ export function usePoiCatchupDetailController() {
     setOpenSectionIds([])
     setImagePreviewSrc(null)
     setManualCandidateDraft(null)
+    setCreatePoiName("")
+    setCreatePoiType("")
+    setCreatePoiClusterId("")
   }
 
   const applyLinkedCandidateInPanel = (params: {
@@ -129,6 +138,12 @@ export function usePoiCatchupDetailController() {
     setManualCandidateDraft,
     recomputeCandidateInFlightId,
     setRecomputeCandidateInFlightId,
+    createPoiName,
+    setCreatePoiName,
+    createPoiType,
+    setCreatePoiType,
+    createPoiClusterId,
+    setCreatePoiClusterId,
     openLinkPanel,
     closeLinkPanel,
     applyLinkedCandidateInPanel,

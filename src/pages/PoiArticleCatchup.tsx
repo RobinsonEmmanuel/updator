@@ -8,9 +8,13 @@ import {
 import { cn } from "@/lib/utils"
 import {
   decodeHtmlEntities,
-  normalizeForMatch,
-  buildRegionPoiMap,
 } from "@/features/article-poi-catchup/domain"
+import {
+  highlightSectionHtmlByCandidates,
+  resolveSectionTitleCandidateId,
+} from "@/features/article-poi-catchup/articleSectionHtml"
+import { useRegionPoiDirectoryOptions } from "@/features/article-poi-catchup/useRegionPoiDirectoryOptions"
+import { useArticleDetailSections } from "@/features/article-poi-catchup/useArticleDetailSections"
 import { NoSitesMessage } from "@/features/article-poi-catchup/components/NoSitesMessage"
 import { ActionLogWidget } from "@/features/article-poi-catchup/components/ActionLogWidget"
 import { BacklogTable } from "@/features/article-poi-catchup/components/BacklogTable"
@@ -19,377 +23,9 @@ import { usePoiCatchupDetailController } from "@/features/article-poi-catchup/us
 import { ArticleDetailHeader } from "@/features/article-poi-catchup/components/ArticleDetailHeader"
 import { ArticleSectionsPanel } from "@/features/article-poi-catchup/components/ArticleSectionsPanel"
 import { CandidateListPanel } from "@/features/article-poi-catchup/components/CandidateListPanel"
+import { DetailCandidateCard } from "@/features/article-poi-catchup/components/DetailCandidateCard"
 import { AnnuaireModal } from "@/features/article-poi-catchup/components/AnnuaireModal"
 import { ScanModal } from "@/features/article-poi-catchup/components/ScanModal"
-
-interface ArticleSectionView {
-  id: string
-  title: string
-  level: "h1" | "h2" | "h3" | "intro"
-  html: string
-  text: string
-  candidateIds: string[]
-  suggestionCount: number
-}
-
-interface CandidateSectionMeta {
-  candidate_id: string
-  name: string
-  source?: string
-  section_title?: string
-  occurrences?: Array<{ section_title?: string }>
-  suggestions?: unknown[]
-}
-
-function parseSectionsFromHtml(html: string, candidates: CandidateSectionMeta[]): ArticleSectionView[] {
-  const source = html || ""
-  if (typeof window === "undefined" || typeof DOMParser === "undefined" || !source) {
-    return [
-      {
-        id: "intro",
-        title: "Contenu",
-        level: "intro",
-        html: source,
-        text: decodeHtmlEntities(source),
-        candidateIds: [],
-        suggestionCount: 0,
-      },
-    ]
-  }
-
-  const parser = new DOMParser()
-  const doc = parser.parseFromString(source, "text/html")
-
-  doc.body.querySelectorAll("img").forEach((img) => {
-    const src = img.getAttribute("src") || ""
-    if (!src) return
-    img.setAttribute("data-preview-src", src)
-    img.setAttribute("style", "max-width:200px;width:100%;height:auto;cursor:zoom-in;display:block;margin:8px 0;")
-    img.setAttribute("loading", "lazy")
-  })
-
-  type RawSection = { id: string; title: string; level: "h1" | "h2" | "h3" | "intro"; nodes: Node[] }
-  const children = Array.from(doc.body.childNodes)
-  const headingEntries = children
-    .map((node, nodeIndex) => {
-      const el = node.nodeType === Node.ELEMENT_NODE ? (node as HTMLElement) : null
-      const tag = (el?.tagName || "").toLowerCase()
-      if (tag !== "h1" && tag !== "h2" && tag !== "h3") return null
-      const title = decodeHtmlEntities(el?.textContent || "").replace(/\s+/g, " ").trim()
-      if (!title) return null
-      return {
-        nodeIndex,
-        level: tag as "h1" | "h2" | "h3",
-        title,
-        normalizedTitle: normalizeForMatch(title),
-      }
-    })
-    .filter((entry): entry is { nodeIndex: number; level: "h1" | "h2" | "h3"; title: string; normalizedTitle: string } => !!entry)
-
-  const normalizedCandidates = candidates
-    .map((candidate) => ({ ...candidate, normalized: normalizeForMatch(candidate.name) }))
-    .filter((candidate) => candidate.normalized.length >= 3)
-
-  const extractSommaireTitles = (): string[] => {
-    const containers = Array.from(doc.body.querySelectorAll("div,section,aside,nav"))
-    for (const container of containers) {
-      const text = normalizeForMatch(container.textContent || "")
-      if (!text.includes("sommaire")) continue
-      const list = container.querySelector("ul,ol")
-      if (!list) continue
-      const titles = Array.from(list.querySelectorAll("li"))
-        .map((li) => decodeHtmlEntities(li.textContent || "").replace(/\s+/g, " ").trim())
-        .filter((t) => t.length > 0)
-      if (titles.length > 0) return titles
-    }
-    return []
-  }
-
-  const sommaireTitles = extractSommaireTitles()
-  const usedHeadingNodeIndexes = new Set<number>()
-  const sommaireAnchors = sommaireTitles
-    .map((title) => {
-      const normalizedTitle = normalizeForMatch(title)
-      if (!normalizedTitle) return null
-      const match = headingEntries.find((entry) => {
-        if (usedHeadingNodeIndexes.has(entry.nodeIndex)) return false
-        return (
-          entry.normalizedTitle === normalizedTitle ||
-          entry.normalizedTitle.includes(normalizedTitle) ||
-          normalizedTitle.includes(entry.normalizedTitle)
-        )
-      })
-      if (!match) return null
-      usedHeadingNodeIndexes.add(match.nodeIndex)
-      return {
-        nodeIndex: match.nodeIndex,
-        level: match.level,
-        title,
-      }
-    })
-    .filter((entry): entry is { nodeIndex: number; level: "h1" | "h2" | "h3"; title: string } => !!entry)
-    .sort((a, b) => a.nodeIndex - b.nodeIndex)
-
-  const fallbackAnchors = (() => {
-    if (sommaireAnchors.length > 0) return sommaireAnchors
-    const h2Only = headingEntries.filter((entry) => entry.level === "h2")
-    const selected = h2Only.length > 0 ? h2Only : headingEntries
-    return selected.map((entry) => ({
-      nodeIndex: entry.nodeIndex,
-      level: entry.level,
-      title: entry.title,
-    }))
-  })()
-
-  const sections: RawSection[] = []
-  if (fallbackAnchors.length === 0) {
-    sections.push({ id: "intro", title: "Introduction", level: "intro", nodes: children.map((node) => node.cloneNode(true)) })
-  } else {
-    const firstIndex = fallbackAnchors[0].nodeIndex
-    if (firstIndex > 0) {
-      sections.push({
-        id: "intro",
-        title: "Introduction",
-        level: "intro",
-        nodes: children.slice(0, firstIndex).map((node) => node.cloneNode(true)),
-      })
-    }
-    fallbackAnchors.forEach((anchor, idx) => {
-      const end = idx + 1 < fallbackAnchors.length ? fallbackAnchors[idx + 1].nodeIndex : children.length
-      const nodes = children.slice(anchor.nodeIndex, end).map((node) => node.cloneNode(true))
-      sections.push({
-        id: `section-${idx + 1}-${anchor.title.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "") || "heading"}`,
-        title: anchor.title,
-        level: anchor.level,
-        nodes,
-      })
-    })
-  }
-
-  const builtSections = sections
-    .map((section) => {
-      const tmp = doc.createElement("div")
-      section.nodes.forEach((node) => tmp.appendChild(node))
-      const htmlContent = tmp.innerHTML
-      const textContent = decodeHtmlEntities(tmp.textContent || "").replace(/\s+/g, " ").trim()
-      const normalizedText = normalizeForMatch(textContent)
-      const sectionTitleNormalized = normalizeForMatch(section.title)
-      const candidateIds = normalizedCandidates
-        .filter((candidate) => {
-          const titleMatches = [
-            candidate.section_title || "",
-            ...(Array.isArray(candidate.occurrences) ? candidate.occurrences.map((o) => o.section_title || "") : []),
-          ]
-            .map((t) => normalizeForMatch(t))
-            .filter((t) => t.length > 0)
-            .some((candidateSectionTitle) =>
-              candidateSectionTitle === sectionTitleNormalized ||
-              candidateSectionTitle.includes(sectionTitleNormalized) ||
-              sectionTitleNormalized.includes(candidateSectionTitle)
-            )
-          if (titleMatches) return true
-          return normalizedText.includes(candidate.normalized)
-        })
-        .map((candidate) => candidate.candidate_id)
-      const suggestionCount = candidates
-        .filter((candidate) => candidateIds.includes(candidate.candidate_id))
-        .reduce((acc, candidate) => acc + (Array.isArray(candidate.suggestions) ? candidate.suggestions.length : 0), 0)
-      return {
-        id: section.id,
-        title: section.title,
-        level: section.level,
-        html: htmlContent,
-        text: textContent,
-        candidateIds,
-        suggestionCount,
-      } satisfies ArticleSectionView
-    })
-    .filter((section) => section.html.trim().length > 0 || section.level !== "intro")
-  return builtSections
-}
-
-function highlightSectionHtmlByCandidates(
-  html: string,
-  candidates: Array<{
-    candidate_id: string
-    name: string
-    section_title?: string
-    evidence_excerpt?: string
-    occurrences?: Array<{ excerpt?: string; section_title?: string }>
-  }>,
-  activeCandidateId: string | null
-): string {
-  const source = html || ""
-  if (!source || typeof window === "undefined" || typeof DOMParser === "undefined") return source
-  const parser = new DOMParser()
-  const doc = parser.parseFromString(source, "text/html")
-
-  const buildEvidenceVariants = (candidate: {
-    name: string
-    section_title?: string
-    evidence_excerpt?: string
-    occurrences?: Array<{ excerpt?: string; section_title?: string }>
-  }): string[] => {
-    const snippets = [
-      candidate.section_title || "",
-      candidate.evidence_excerpt || "",
-      ...(candidate.occurrences || []).flatMap((entry) => [entry.excerpt || "", entry.section_title || ""]),
-    ]
-    const seedToken = normalizeForMatch(candidate.name)
-      .split(" ")
-      .find((token) => token.length >= 4)
-    if (!seedToken) return []
-
-    return snippets
-      .flatMap((snippet) => decodeHtmlEntities(snippet).split(/[.!?;\n]/g))
-      .map((part) => part.replace(/\s+/g, " ").replace(/[.…]/g, "").trim())
-      .filter((part) => part.length >= 8 && part.length <= 90)
-      .filter((part) => normalizeForMatch(part).includes(seedToken))
-  }
-
-  const baseEntries = candidates
-    .map((candidate) => {
-      const label = decodeHtmlEntities(candidate.name).trim()
-      return {
-      candidateId: candidate.candidate_id,
-      label,
-      normalized: normalizeForMatch(candidate.name),
-      evidenceVariants: buildEvidenceVariants(candidate),
-      }
-    })
-    .filter((entry) => entry.label.length >= 3)
-    .sort((a, b) => b.label.length - a.label.length)
-
-  if (baseEntries.length === 0) return doc.body.innerHTML
-
-  const variants: Array<{ pattern: string; candidateId: string; normalized: string }> = []
-  const seenVariant = new Set<string>()
-  baseEntries.forEach((entry) => {
-    const raw = entry.label
-    const withCurlyApostrophe = raw.replace(/'/g, "’")
-    const withStraightApostrophe = raw.replace(/’/g, "'")
-    const noParen = raw.replace(/\([^)]*\)/g, " ").replace(/\s+/g, " ").trim()
-    const acronym = (raw.match(/\(([^)]+)\)/)?.[1] || "").trim()
-    ;[raw, withCurlyApostrophe, withStraightApostrophe, noParen, acronym, ...entry.evidenceVariants]
-      .filter((v) => v && v.length >= 3)
-      .forEach((variant) => {
-        const normalizedVariant = normalizeForMatch(variant)
-        if (!normalizedVariant) return
-        const key = `${entry.candidateId}:${normalizedVariant}`
-        if (seenVariant.has(key)) return
-        seenVariant.add(key)
-        const escaped = variant
-          .replace(/[.*+?^${}()|[\]\\]/g, "\\$&")
-          .replace(/\\\s\+/g, "\\s+")
-          .replace(/\s+/g, "\\s+")
-          .replace(/['’`´]/g, "['’`´]")
-          .replace(/-/g, "[-–—]")
-        variants.push({ pattern: escaped, candidateId: entry.candidateId, normalized: normalizedVariant })
-      })
-  })
-
-  const patterns = variants.map((entry) => entry.pattern)
-  if (patterns.length === 0) return doc.body.innerHTML
-  const regex = new RegExp(`(${patterns.join("|")})`, "gi")
-  const walker = doc.createTreeWalker(doc.body, NodeFilter.SHOW_TEXT)
-  const textNodes: Text[] = []
-  let node = walker.nextNode()
-  while (node) {
-    textNodes.push(node as Text)
-    node = walker.nextNode()
-  }
-
-  textNodes.forEach((textNode) => {
-    const parentTag = textNode.parentElement?.tagName.toLowerCase()
-    if (parentTag === "script" || parentTag === "style" || parentTag === "noscript" || parentTag === "mark") return
-    const textValue = textNode.nodeValue || ""
-    if (!textValue || !regex.test(textValue)) return
-
-    regex.lastIndex = 0
-    const frag = doc.createDocumentFragment()
-    let lastIndex = 0
-    textValue.replace(regex, (match, _group, offset) => {
-      if (offset > lastIndex) frag.appendChild(doc.createTextNode(textValue.slice(lastIndex, offset)))
-      const normalizedMatch = normalizeForMatch(match)
-      const candidateId =
-        variants.find(
-          (entry) =>
-            normalizedMatch === entry.normalized ||
-            normalizedMatch.includes(entry.normalized) ||
-            entry.normalized.includes(normalizedMatch)
-        )?.candidateId ||
-        baseEntries.find(
-          (entry) =>
-            normalizedMatch === entry.normalized ||
-            normalizedMatch.includes(entry.normalized) ||
-            entry.normalized.includes(normalizedMatch)
-        )?.candidateId ||
-        null
-      const mark = doc.createElement("mark")
-      mark.textContent = match
-      if (candidateId) {
-        mark.setAttribute("data-candidate-id", candidateId)
-        mark.className =
-          activeCandidateId === candidateId
-            ? "inline rounded px-0.5 cursor-pointer !bg-orange-300 !text-orange-950 ring-1 ring-orange-400 font-semibold"
-            : "inline rounded px-0.5 cursor-pointer !bg-yellow-200 !text-stone-900 ring-1 ring-yellow-300"
-      } else {
-        mark.className = "inline rounded px-0.5 !bg-yellow-200 !text-stone-900 ring-1 ring-yellow-300"
-      }
-      frag.appendChild(mark)
-      lastIndex = offset + match.length
-      return match
-    })
-    if (lastIndex < textValue.length) frag.appendChild(doc.createTextNode(textValue.slice(lastIndex)))
-    textNode.parentNode?.replaceChild(frag, textNode)
-  })
-
-  return doc.body.innerHTML
-}
-
-function resolveSectionTitleCandidateId(
-  title: string,
-  candidates: Array<{
-    candidate_id: string
-    name: string
-    section_title?: string
-    occurrences?: Array<{ section_title?: string }>
-  }>
-): string | null {
-  const normalizedTitle = normalizeForMatch(title)
-  if (!normalizedTitle) return null
-  for (const candidate of candidates) {
-    const variants = [
-      candidate.name,
-      candidate.section_title || "",
-      ...(candidate.occurrences || []).map((entry) => entry.section_title || ""),
-    ]
-      .map((value) => normalizeForMatch(value))
-      .filter((value) => value.length >= 3)
-    if (
-      variants.some(
-        (variant) =>
-          normalizedTitle.includes(variant) ||
-          variant.includes(normalizedTitle) ||
-          directionalWordOverlap(normalizedTitle, variant) >= 0.6
-      )
-    ) {
-      return candidate.candidate_id
-    }
-  }
-  return null
-}
-
-function directionalWordOverlap(a: string, b: string): number {
-  const aWords = new Set(a.split(" ").filter((word) => word.length >= 3))
-  const bWords = new Set(b.split(" ").filter((word) => word.length >= 3))
-  if (aWords.size === 0 || bWords.size === 0) return 0
-  let overlap = 0
-  aWords.forEach((word) => {
-    if (bWords.has(word)) overlap++
-  })
-  return overlap / Math.max(1, Math.min(aWords.size, bWords.size))
-}
 
 export function PoiArticleCatchup() {
   const { selectedSite, hasNoSites, isAllSitesSelected, sites, setSelectedSiteId } = useSiteContext()
@@ -423,6 +59,7 @@ export function PoiArticleCatchup() {
     recomputeCandidate,
     markCandidate,
     manualLink,
+    createRl,
     unlinkPoi,
     removeCandidate,
     siteCategories,
@@ -460,6 +97,12 @@ export function PoiArticleCatchup() {
     setManualCandidateDraft,
     recomputeCandidateInFlightId,
     setRecomputeCandidateInFlightId,
+    createPoiName,
+    setCreatePoiName,
+    createPoiType,
+    setCreatePoiType,
+    createPoiClusterId,
+    setCreatePoiClusterId,
     openLinkPanel,
     closeLinkPanel,
     applyLinkedCandidateInPanel,
@@ -472,71 +115,41 @@ export function PoiArticleCatchup() {
     () => (linkPanelRow?.detectedCandidates || []),
     [linkPanelRow]
   )
+  const linkedRlPlaceIdsInPanel = useMemo(
+    () =>
+      Array.from(
+        new Set(
+          panelCandidateGroups
+            .map((group) => group.rl_place_id)
+            .filter((id): id is string => typeof id === "string" && id.length > 0)
+        )
+      ),
+    [panelCandidateGroups]
+  )
 
   const annuaireModalCandidate = useMemo(
     () => panelCandidateGroups.find((g) => g.candidate_id === annuaireModalCandidateId) || null,
     [panelCandidateGroups, annuaireModalCandidateId]
   )
 
-  const availableClusterNames = useMemo(
-    () =>
-      Array.from(
-        new Set(
-          (regionPois.data || [])
-            .flatMap((poi) => poi.cluster_names || [])
-            .map((name) => decodeHtmlEntities(name).trim())
-            .filter((name) => name.length > 0)
-        )
-      ).sort((a, b) => a.localeCompare(b)),
-    [regionPois.data]
-  )
-
-  const availableTypeLabels = useMemo(
-    () =>
-      Array.from(
-        new Set(
-          (regionPois.data || []).map((poi) =>
-            decodeHtmlEntities(poi.place_type_label_fr || poi.place_type || "Autre").trim()
-          )
-        )
-      ).sort((a, b) => a.localeCompare(b)),
-    [regionPois.data]
-  )
-
-  const filteredRegionPois = useMemo(() => {
-    const rows = regionPois.data || []
-    const q = normalizeForMatch(regionPoiSearch)
-    return rows.filter((poi) => {
-      const placeTypeLabel = decodeHtmlEntities(poi.place_type_label_fr || poi.place_type || "")
-      const clusterNames = (poi.cluster_names || []).map((name) => decodeHtmlEntities(name))
-      if (regionPoiClusterFilter && !clusterNames.includes(regionPoiClusterFilter)) return false
-      if (regionPoiTypeFilter && placeTypeLabel.toLowerCase() !== regionPoiTypeFilter.toLowerCase()) return false
-      if (!q) return true
-      return (
-        normalizeForMatch(decodeHtmlEntities(poi.name)).includes(q) ||
-        normalizeForMatch(placeTypeLabel).includes(q) ||
-        normalizeForMatch(decodeHtmlEntities(poi.place_type || "")).includes(q) ||
-        clusterNames.some((name) => normalizeForMatch(name).includes(q)) ||
-        normalizeForMatch(poi.rl_place_id).includes(q)
-      )
-    })
-  }, [regionPois.data, regionPoiSearch, regionPoiClusterFilter, regionPoiTypeFilter])
+  const {
+    availableClusterNames,
+    availableTypeLabels,
+    createPoiTypeOptions,
+    createPoiClusterOptions,
+    filteredRegionPois,
+    regionPoiById,
+    placeTypeLabelByType,
+  } = useRegionPoiDirectoryOptions({
+    regionPois: regionPois.data || [],
+    regionPoiSearch,
+    regionPoiClusterFilter,
+    regionPoiTypeFilter,
+  })
   const showRegionPoiSearchSpinner = regionPois.isLoading || regionPois.isFetching
   const showRegionPoiLoadingPlaceholder =
     (regionPois.isLoading || regionPois.isFetching) && filteredRegionPois.length === 0
-  const regionPoiById = useMemo(() => buildRegionPoiMap(regionPois.data || []), [regionPois.data])
-  const placeTypeLabelByType = useMemo(() => {
-    const map = new Map<string, string>()
-    ;(regionPois.data || []).forEach((poi) => {
-      const key = (poi.place_type || "").trim().toLowerCase()
-      const label = decodeHtmlEntities(poi.place_type_label_fr || "").trim()
-      if (key && label && !map.has(key)) map.set(key, label)
-    })
-    return map
-  }, [regionPois.data])
   const unknownMetaLogRef = useRef<Set<string>>(new Set())
-  const lastOpenedArticleIdRef = useRef<string | null>(null)
-  const openSectionTitleKeysRef = useRef<string[]>([])
   const logUnknownMeta = (
     kind: "linked" | "suggestion",
     candidateId: string,
@@ -559,43 +172,25 @@ export function PoiArticleCatchup() {
       ...extra,
     })
   }
-  const articleSections = useMemo(() => {
-    const html = linkPanelRow?.htmlCleaned || linkPanelRow?.htmlBrut || ""
-    return parseSectionsFromHtml(html, panelCandidateGroups)
-  }, [linkPanelRow?.htmlCleaned, linkPanelRow?.htmlBrut, panelCandidateGroups])
-  const candidateSectionIdsMap = useMemo(() => {
-    const map = new Map<string, string[]>()
-    articleSections.forEach((section) => {
-      section.candidateIds.forEach((candidateId) => {
-        const prev = map.get(candidateId) || []
-        if (!prev.includes(section.id)) map.set(candidateId, [...prev, section.id])
-      })
-    })
-    return map
-  }, [articleSections])
-  const openSectionCandidateIds = useMemo(() => {
-    const openSet = new Set(openSectionIds)
-    const ids = new Set<string>()
-    articleSections.forEach((section) => {
-      if (!openSet.has(section.id)) return
-      section.candidateIds.forEach((candidateId) => ids.add(candidateId))
-    })
-    return ids
-  }, [articleSections, openSectionIds])
-  const visiblePanelCandidateGroups = useMemo(() => {
-    if (focusedCandidateId) {
-      return panelCandidateGroups.filter((group) => group.candidate_id === focusedCandidateId)
-    }
-    return panelCandidateGroups.filter((group) => openSectionCandidateIds.has(group.candidate_id))
-  }, [panelCandidateGroups, focusedCandidateId, openSectionCandidateIds])
-  const linkedPanelCandidateGroups = useMemo(
-    () => visiblePanelCandidateGroups.filter((group) => !!group.rl_place_id),
-    [visiblePanelCandidateGroups]
-  )
-  const unlinkedPanelCandidateGroups = useMemo(
-    () => visiblePanelCandidateGroups.filter((group) => !group.rl_place_id),
-    [visiblePanelCandidateGroups]
-  )
+  const {
+    articleSections,
+    candidateSectionIdsMap,
+    visiblePanelCandidateGroups,
+    linkedPanelCandidateGroups,
+    unlinkedPanelCandidateGroups,
+  } = useArticleDetailSections({
+    linkPanelRow,
+    panelCandidateGroups,
+    openSectionIds,
+    setOpenSectionIds,
+    focusedCandidateId,
+    setFocusedCandidateId,
+    setManualCandidateDraft,
+    setLinkPanelRow,
+    selectedCandidateId,
+    setSelectedCandidateId,
+    backlogRows: backlog.data?.data || [],
+  })
   const isDetailView = Boolean(linkPanelRow)
 
   useEffect(() => {
@@ -606,70 +201,6 @@ export function PoiArticleCatchup() {
     window.addEventListener("keydown", onKeydown)
     return () => window.removeEventListener("keydown", onKeydown)
   }, [linkPanelRow])
-
-  useEffect(() => {
-    if (!linkPanelRow) return
-    const latestRows = backlog.data?.data || []
-    const updated = latestRows.find((row) => row.articleId === linkPanelRow.articleId)
-    if (updated) {
-      setLinkPanelRow(updated)
-      if (selectedCandidateId) {
-        const groups = updated.detectedCandidates || []
-        const stillExists = groups.some((g) => g.candidate_id === selectedCandidateId)
-        if (!stillExists) setSelectedCandidateId(groups[0]?.candidate_id || null)
-      }
-      return
-    }
-    // If current filtered page no longer contains the article, keep panel as-is.
-  }, [backlog.data?.data, linkPanelRow?.articleId, selectedCandidateId])
-
-  useEffect(() => {
-    if (!linkPanelRow) {
-      setOpenSectionIds([])
-      setFocusedCandidateId(null)
-      setManualCandidateDraft(null)
-      lastOpenedArticleIdRef.current = null
-      return
-    }
-
-    // Only reset panel view when switching to another article.
-    if (lastOpenedArticleIdRef.current !== linkPanelRow.articleId) {
-      setOpenSectionIds([])
-      setFocusedCandidateId(null)
-      setManualCandidateDraft(null)
-      lastOpenedArticleIdRef.current = linkPanelRow.articleId
-    }
-  }, [linkPanelRow?.articleId])
-
-  useEffect(() => {
-    openSectionTitleKeysRef.current = articleSections
-      .filter((section) => openSectionIds.includes(section.id))
-      .map((section) => normalizeForMatch(section.title) || section.id)
-  }, [articleSections, openSectionIds])
-
-  useEffect(() => {
-    if (!linkPanelRow) return
-    if (openSectionTitleKeysRef.current.length === 0) return
-    const desired = new Set(openSectionTitleKeysRef.current)
-    const remappedIds = articleSections
-      .filter((section) => desired.has(normalizeForMatch(section.title) || section.id))
-      .map((section) => section.id)
-    if (remappedIds.length === 0) return
-    const current = openSectionIds.join("|")
-    const next = remappedIds.join("|")
-    if (current !== next) setOpenSectionIds(remappedIds)
-  }, [articleSections, linkPanelRow?.articleId])
-
-  useEffect(() => {
-    if (!focusedCandidateId) return
-    const sectionIds = candidateSectionIdsMap.get(focusedCandidateId) || []
-    if (sectionIds.length === 0) return
-    setOpenSectionIds((prev) => {
-      const merged = new Set(prev)
-      sectionIds.forEach((id) => merged.add(id))
-      return Array.from(merged)
-    })
-  }, [focusedCandidateId, candidateSectionIdsMap])
 
   if (hasNoSites) return <NoSitesMessage />
 
@@ -1159,6 +690,186 @@ export function PoiArticleCatchup() {
                         })
                       }
                       const suggestions = isLinkedCandidate ? [] : baseSuggestions
+                      const linkedDisplayName = decodeHtmlEntities(
+                        group.rl_place_name || linkedPoi?.name || group.name
+                      )
+                      if (group.candidate_id) {
+                        return (
+                          <DetailCandidateCard
+                            key={group.candidate_id}
+                            group={group}
+                            expanded={expanded}
+                            mutationPending={mutationPending}
+                            recomputePending={
+                              recomputeCandidate.isPending &&
+                              recomputeCandidateInFlightId === group.candidate_id
+                            }
+                            unlinkConfirmOpen={unlinkConfirmCandidateId === group.candidate_id}
+                            removeConfirmOpen={removeConfirmCandidateId === group.candidate_id}
+                            linkedRlPlaceIdsInPanel={linkedRlPlaceIdsInPanel}
+                            regionPoiById={regionPoiById}
+                            placeTypeLabelByType={placeTypeLabelByType}
+                            showUnlinkedHeader={showUnlinkedHeader}
+                            showSuggestionHeader
+                            logUnknownMeta={logUnknownMeta}
+                            onFocusCandidate={(candidateId) => {
+                              setSelectedCandidateId(candidateId)
+                              setFocusedCandidateId(candidateId)
+                              const candidateSectionIds = candidateSectionIdsMap.get(candidateId) || []
+                              if (candidateSectionIds.length > 0) {
+                                setOpenSectionIds((prev) => {
+                                  const merged = new Set(prev)
+                                  candidateSectionIds.forEach((id: string) => merged.add(id))
+                                  return Array.from(merged)
+                                })
+                              }
+                            }}
+                            onToggleInfo={(candidateId) =>
+                              setExpandedCandidateInfo((prev) => ({
+                                ...prev,
+                                [candidateId]: !prev[candidateId],
+                              }))
+                            }
+                            onRecomputeCandidate={(candidate) =>
+                              triggerRecomputeCandidate(
+                                linkPanelRow,
+                                candidate.candidate_id,
+                                candidate.name
+                              )
+                            }
+                            onOpenAnnuaire={(candidate) => {
+                              setSelectedCandidateId(candidate.candidate_id)
+                              setAnnuaireModalCandidateId(candidate.candidate_id)
+                              setSelectedRegionPoi(null)
+                              setCreatePoiName(decodeHtmlEntities(candidate.name))
+                              setCreatePoiType("")
+                              setCreatePoiClusterId("")
+                            }}
+                            onToggleUnlinkConfirm={(candidateId) =>
+                              setUnlinkConfirmCandidateId((prev) =>
+                                prev === candidateId ? null : candidateId
+                              )
+                            }
+                            onConfirmUnlink={(candidate) =>
+                              unlinkPoi.mutate(
+                                {
+                                  articleId: linkPanelRow.articleId,
+                                  candidateId: candidate.candidate_id,
+                                },
+                                {
+                                  onSuccess: () => {
+                                    setUnlinkConfirmCandidateId(null)
+                                    applyUnlinkedCandidateInPanel(candidate.candidate_id)
+                                    void backlog.refetch()
+                                    pushLog(
+                                      "success",
+                                      `Liaison retirée (${decodeHtmlEntities(linkPanelRow.title)}) · candidat ${decodeHtmlEntities(candidate.name)}`
+                                    )
+                                  },
+                                  onError: (error) =>
+                                    pushLog(
+                                      "error",
+                                      `Erreur retrait liaison (${decodeHtmlEntities(linkPanelRow.title)}): ${error.message}`
+                                    ),
+                                }
+                              )
+                            }
+                            onToggleRemoveConfirm={(candidateId) =>
+                              setRemoveConfirmCandidateId((prev) =>
+                                prev === candidateId ? null : candidateId
+                              )
+                            }
+                            onConfirmRemove={(candidate) =>
+                              removeCandidate.mutate(
+                                {
+                                  articleId: linkPanelRow.articleId,
+                                  candidateId: candidate.candidate_id,
+                                },
+                                {
+                                  onSuccess: () => {
+                                    setRemoveConfirmCandidateId(null)
+                                    setUnlinkConfirmCandidateId(null)
+                                    applyRemovedCandidateInPanel(candidate.candidate_id)
+                                    pushLog(
+                                      "success",
+                                      `Candidat supprimé (${decodeHtmlEntities(linkPanelRow.title)}) · ${decodeHtmlEntities(candidate.name)}`
+                                    )
+                                  },
+                                  onError: (error) =>
+                                    pushLog(
+                                      "error",
+                                      `Erreur suppression candidat (${decodeHtmlEntities(linkPanelRow.title)}): ${error.message}`
+                                    ),
+                                }
+                              )
+                            }
+                            onSuggestionLink={({
+                              group: selectedGroup,
+                              suggestion,
+                              typeLabel,
+                              clusterLabel,
+                            }) =>
+                              manualLink.mutate(
+                                {
+                                  articleId: linkPanelRow.articleId,
+                                  rlPlaceId: suggestion.rl_place_id,
+                                  rlPlaceName: suggestion.name,
+                                  placeType: suggestion.place_type,
+                                  placeTypeLabelFr: typeLabel,
+                                  clusterId: suggestion.cluster_id,
+                                  clusterName: clusterLabel,
+                                  candidateId: selectedGroup.candidate_id,
+                                  confidence: "high",
+                                  score: suggestion.score ?? 1,
+                                  validated: true,
+                                },
+                                {
+                                  onSuccess: (res) => {
+                                    if (
+                                      res.duplicate_link_prevented &&
+                                      res.existingCandidateId
+                                    ) {
+                                      applyLinkedCandidateInPanel({
+                                        candidateId: res.existingCandidateId,
+                                        rlPlaceId: suggestion.rl_place_id,
+                                        rlPlaceName: suggestion.name,
+                                        placeType: suggestion.place_type,
+                                        placeTypeLabelFr: typeLabel,
+                                        clusterId: suggestion.cluster_id,
+                                        clusterName: clusterLabel,
+                                      })
+                                      pushLog(
+                                        "info",
+                                        `POI déjà lié sur cet article, liaison conservée (${decodeHtmlEntities(linkPanelRow.title)})`
+                                      )
+                                    } else {
+                                      applyLinkedCandidateInPanel({
+                                        candidateId: selectedGroup.candidate_id,
+                                        rlPlaceId: suggestion.rl_place_id,
+                                        rlPlaceName: suggestion.name,
+                                        placeType: suggestion.place_type,
+                                        placeTypeLabelFr: typeLabel,
+                                        clusterId: suggestion.cluster_id,
+                                        clusterName: clusterLabel,
+                                      })
+                                    }
+                                    void backlog.refetch()
+                                    pushLog(
+                                      "success",
+                                      `Liaison OK (${decodeHtmlEntities(linkPanelRow.title)}) -> ${suggestion.rl_place_id}`
+                                    )
+                                  },
+                                  onError: (error) =>
+                                    pushLog(
+                                      "error",
+                                      `Erreur liaison manuelle (${decodeHtmlEntities(linkPanelRow.title)}): ${error.message}`
+                                    ),
+                                }
+                              )
+                            }
+                          />
+                        )
+                      }
                       return (
                         <div key={group.candidate_id} className="space-y-2">
                           {showUnlinkedHeader ? (
@@ -1184,7 +895,7 @@ export function PoiArticleCatchup() {
                                 if (candidateSectionIds.length > 0) {
                                   setOpenSectionIds((prev) => {
                                     const merged = new Set(prev)
-                                    candidateSectionIds.forEach((id) => merged.add(id))
+                                    candidateSectionIds.forEach((id: string) => merged.add(id))
                                     return Array.from(merged)
                                   })
                                 }
@@ -1192,13 +903,18 @@ export function PoiArticleCatchup() {
                               className="text-left min-w-0 flex-1"
                             >
                               <div className="text-sm font-medium text-stone-800 break-words">
-                                {decodeHtmlEntities(group.name)}
+                                {isLinkedCandidate ? linkedDisplayName : decodeHtmlEntities(group.name)}
                               </div>
                               <div className="text-xs text-stone-500 mt-0.5">
                                 {isLinkedCandidate
                                   ? `POI RL validé`
                                   : `Score ${Math.round((group.mention_score || 0) * 100)}% · ${suggestions.length} rapprochement(s)`}
                               </div>
+                              {!isLinkedCandidate ? (
+                                <div className="mt-0.5 text-[11px] text-stone-500">
+                                  Candidat détecté: {decodeHtmlEntities(group.name)}
+                                </div>
+                              ) : null}
                               {isLinkedCandidate ? (
                                 <div className="mt-1 text-[11px] text-stone-600 leading-relaxed">
                                   <span>{linkedTypeLabel}</span>
@@ -1254,6 +970,9 @@ export function PoiArticleCatchup() {
                                     setSelectedCandidateId(group.candidate_id)
                                     setAnnuaireModalCandidateId(group.candidate_id)
                                     setSelectedRegionPoi(null)
+                                    setCreatePoiName(decodeHtmlEntities(group.name))
+                                    setCreatePoiType("")
+                                    setCreatePoiClusterId("")
                                   }}
                                   className="inline-flex items-center justify-center h-8 w-8 rounded border border-orange-200 bg-orange-50 text-orange-700 hover:bg-orange-100"
                                   title="Ouvrir l'annuaire RL"
@@ -1415,6 +1134,7 @@ export function PoiArticleCatchup() {
                               {suggestions.length > 0 ? (
                               <div className="space-y-1">
                                 {suggestions.slice(0, 8).map((s) => {
+                                  const alreadyLinkedOnArticle = linkedRlPlaceIdsInPanel.includes(s.rl_place_id)
                                   const fallbackPoi = regionPoiById.get(s.rl_place_id)
                                   const typeKey = (s.place_type || fallbackPoi?.place_type || "").trim().toLowerCase()
                                   const typeLabel = decodeHtmlEntities(
@@ -1447,7 +1167,9 @@ export function PoiArticleCatchup() {
                                   <div key={s.rl_place_id} className="flex items-stretch gap-1">
                                     <button
                                       type="button"
+                                      disabled={alreadyLinkedOnArticle}
                                       onClick={() =>
+                                        !alreadyLinkedOnArticle &&
                                         manualLink.mutate(
                                           {
                                             articleId: linkPanelRow.articleId,
@@ -1463,17 +1185,33 @@ export function PoiArticleCatchup() {
                                             validated: true,
                                           },
                                           {
-                                            onSuccess: () =>
+                                            onSuccess: (res) =>
                                               {
-                                                applyLinkedCandidateInPanel({
-                                                  candidateId: group.candidate_id,
-                                                  rlPlaceId: s.rl_place_id,
-                                                  rlPlaceName: s.name,
-                                                  placeType: s.place_type,
-                                                  placeTypeLabelFr: typeLabel,
-                                                  clusterId: s.cluster_id,
-                                                  clusterName: clusterLabel,
-                                                })
+                                                if (res.duplicate_link_prevented && res.existingCandidateId) {
+                                                  applyLinkedCandidateInPanel({
+                                                    candidateId: res.existingCandidateId,
+                                                    rlPlaceId: s.rl_place_id,
+                                                    rlPlaceName: s.name,
+                                                    placeType: s.place_type,
+                                                    placeTypeLabelFr: typeLabel,
+                                                    clusterId: s.cluster_id,
+                                                    clusterName: clusterLabel,
+                                                  })
+                                                  pushLog(
+                                                    "info",
+                                                    `POI déjà lié sur cet article, liaison conservée (${decodeHtmlEntities(linkPanelRow.title)})`
+                                                  )
+                                                } else {
+                                                  applyLinkedCandidateInPanel({
+                                                    candidateId: group.candidate_id,
+                                                    rlPlaceId: s.rl_place_id,
+                                                    rlPlaceName: s.name,
+                                                    placeType: s.place_type,
+                                                    placeTypeLabelFr: typeLabel,
+                                                    clusterId: s.cluster_id,
+                                                    clusterName: clusterLabel,
+                                                  })
+                                                }
                                                 void backlog.refetch()
                                                 pushLog(
                                                   "success",
@@ -1485,13 +1223,19 @@ export function PoiArticleCatchup() {
                                           }
                                         )
                                       }
-                                      className="flex-1 text-left rounded-lg border border-stone-200 bg-white px-2.5 py-1.5 text-[11px] text-stone-700 hover:bg-orange-50"
+                                      className={cn(
+                                        "flex-1 text-left rounded-lg border px-2.5 py-1.5 text-[11px]",
+                                        alreadyLinkedOnArticle
+                                          ? "border-emerald-200 bg-emerald-50 text-emerald-700 cursor-not-allowed"
+                                          : "border-stone-200 bg-white text-stone-700 hover:bg-orange-50"
+                                      )}
                                     >
                                       <div
                                         className="leading-snug break-words"
                                         style={{ display: "-webkit-box", WebkitLineClamp: 2, WebkitBoxOrient: "vertical", overflow: "hidden" }}
                                       >
                                         <span className="font-medium text-stone-800">{decodeHtmlEntities(s.name)}</span>
+                                        <span className="text-stone-500"> (suggestion RL)</span>
                                         <span className="text-stone-500"> · </span>
                                         <span className="text-stone-600">{typeLabel}</span>
                                         <span className="text-stone-500"> · </span>
@@ -1499,6 +1243,9 @@ export function PoiArticleCatchup() {
                                         <span className="text-stone-500"> · </span>
                                         <span className="font-medium text-stone-700">{Math.round(s.score * 100)}%</span>
                                       </div>
+                                      {alreadyLinkedOnArticle ? (
+                                        <div className="mt-1 text-[11px] text-emerald-700">Déjà lié sur cet article</div>
+                                      ) : null}
                                     </button>
                                   </div>
                                   )
@@ -1535,12 +1282,26 @@ export function PoiArticleCatchup() {
         availableClusterNames={availableClusterNames}
         availableTypeLabels={availableTypeLabels}
         filteredRegionPois={filteredRegionPois}
+        linkedRlPlaceIds={linkedRlPlaceIdsInPanel}
         showRegionPoiSearchSpinner={showRegionPoiSearchSpinner}
         showRegionPoiLoadingPlaceholder={showRegionPoiLoadingPlaceholder}
         selectedRegionPoi={selectedRegionPoi}
         onSelectRegionPoi={setSelectedRegionPoi}
         mutationPending={mutationPending}
-        onClose={() => setAnnuaireModalCandidateId(null)}
+        createPoiName={createPoiName}
+        onCreatePoiNameChange={setCreatePoiName}
+        createPoiType={createPoiType}
+        onCreatePoiTypeChange={setCreatePoiType}
+        createPoiTypeOptions={createPoiTypeOptions}
+        createPoiClusterId={createPoiClusterId}
+        onCreatePoiClusterIdChange={setCreatePoiClusterId}
+        createPoiClusterOptions={createPoiClusterOptions}
+        onClose={() => {
+          setAnnuaireModalCandidateId(null)
+          setCreatePoiName("")
+          setCreatePoiType("")
+          setCreatePoiClusterId("")
+        }}
         onValidateLink={() => {
           if (!linkPanelRow || !selectedRegionPoi?.rl_place_id) return
           manualLink.mutate(
@@ -1557,7 +1318,7 @@ export function PoiArticleCatchup() {
               validated: true,
             },
             {
-              onSuccess: () => {
+              onSuccess: (res) => {
                 if (annuaireModalCandidate?.candidate_id && selectedRegionPoi?.rl_place_id) {
                   applyLinkedCandidateInPanel({
                     candidateId: annuaireModalCandidate.candidate_id,
@@ -1569,14 +1330,71 @@ export function PoiArticleCatchup() {
                   })
                 }
                 void backlog.refetch()
+                if (res.duplicate_link_prevented) {
+                  pushLog(
+                    "info",
+                    `POI déjà lié sur cet article, liaison conservée (${decodeHtmlEntities(linkPanelRow.title)})`
+                  )
+                }
                 pushLog(
                   "success",
                   `Liaison OK (${decodeHtmlEntities(linkPanelRow.title)}) -> ${selectedRegionPoi?.rl_place_id || ""}`
                 )
                 setAnnuaireModalCandidateId(null)
+                setCreatePoiName("")
+                setCreatePoiType("")
+                setCreatePoiClusterId("")
               },
               onError: (error) =>
                 pushLog("error", `Erreur liaison manuelle (${decodeHtmlEntities(linkPanelRow.title)}): ${error.message}`),
+            }
+          )
+        }}
+        onCreatePoi={() => {
+          if (!linkPanelRow || !annuaireModalCandidate || !createPoiName.trim() || !createPoiType.trim() || !createPoiClusterId.trim()) return
+          const selectedCluster = createPoiClusterOptions.find((option) => option.value === createPoiClusterId)
+          createRl.mutate(
+            {
+              articleId: linkPanelRow.articleId,
+              candidateId: annuaireModalCandidate.candidate_id,
+              placeName: createPoiName.trim(),
+              placeType: createPoiType.trim(),
+              clusterId: createPoiClusterId.trim(),
+              clusterName: selectedCluster?.label,
+            },
+            {
+              onSuccess: (result) => {
+                if (result.createdRlPlaceId && !result.duplicate_link_prevented) {
+                  const createdTypeLabel =
+                    placeTypeLabelByType.get(createPoiType.trim().toLowerCase()) || createPoiType.trim()
+                  applyLinkedCandidateInPanel({
+                    candidateId: annuaireModalCandidate.candidate_id,
+                    rlPlaceId: result.createdRlPlaceId,
+                    rlPlaceName: createPoiName.trim(),
+                    placeType: createPoiType.trim(),
+                    placeTypeLabelFr: createdTypeLabel,
+                    clusterId: createPoiClusterId.trim(),
+                    clusterName: selectedCluster?.label,
+                  })
+                }
+                if (result.duplicate_link_prevented) {
+                  pushLog(
+                    "info",
+                    `POI déjà lié sur cet article, liaison conservée (${decodeHtmlEntities(linkPanelRow.title)})`
+                  )
+                }
+                void backlog.refetch()
+                pushLog(
+                  "success",
+                  `POI créé et lié (${decodeHtmlEntities(linkPanelRow.title)}) -> ${result.createdRlPlaceId || "N/A"}`
+                )
+                setAnnuaireModalCandidateId(null)
+                setCreatePoiName("")
+                setCreatePoiType("")
+                setCreatePoiClusterId("")
+              },
+              onError: (error) =>
+                pushLog("error", `Erreur création POI (${decodeHtmlEntities(linkPanelRow.title)}): ${error.message}`),
             }
           )
         }}

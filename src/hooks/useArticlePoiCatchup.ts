@@ -1,6 +1,7 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
 import { ingestionApiUrl, ingestionFetch } from "@/lib/api"
 import { mapBacklogResponse } from "@/features/article-poi-catchup/articlePoiMapper"
+import type { CreateRlBody, CreateRlResponse, ManualLinkResponse } from "@redactor-guide/article-poi-contract"
 
 export type PoiAssociationStatus = "pending" | "needs_review" | "linked" | "created" | "ignored"
 export type PoiConfidence = "high" | "medium" | "low"
@@ -408,7 +409,23 @@ export function useArticlePoiMarkCandidate(siteId?: string) {
 
 export function useArticlePoiManualLink(siteId?: string) {
   const queryClient = useQueryClient()
-  return useMutation({
+  return useMutation<
+    ManualLinkResponse,
+    Error,
+    {
+      articleId: string
+      rlPlaceId: string
+      rlPlaceName?: string
+      placeType?: string
+      placeTypeLabelFr?: string
+      clusterId?: string
+      clusterName?: string
+      confidence?: PoiConfidence
+      score?: number
+      validated?: boolean
+      candidateId?: string
+    }
+  >({
     mutationFn: async (payload: {
       articleId: string
       rlPlaceId: string
@@ -440,15 +457,34 @@ export function useArticlePoiManualLink(siteId?: string) {
           validated: payload.validated ?? true,
         }),
       })
-      const data = (await res.json().catch(() => ({}))) as { error?: string }
+      const data = (await res.json().catch(() => ({}))) as {
+        success?: boolean
+        articleId?: string
+        rlPlaceId?: string
+        status?: string
+        duplicate_link_prevented?: boolean
+        existingCandidateId?: string
+        error?: string
+      }
       if (!res.ok) throw new Error(data.error || "Failed to link POI")
-      return data
+      return {
+        success: !!data.success,
+        articleId: data.articleId || payload.articleId,
+        rlPlaceId: data.rlPlaceId || payload.rlPlaceId,
+        status: data.status || "linked",
+        duplicate_link_prevented: data.duplicate_link_prevented === true,
+        existingCandidateId: data.existingCandidateId,
+      } satisfies ManualLinkResponse
     },
-    onSuccess: (_result, payload) => {
+    onSuccess: (result, payload) => {
       updateBacklogRows(queryClient, siteId, (row) => {
-        if (row.articleId !== payload.articleId || !payload.candidateId) return row
+        if (row.articleId !== payload.articleId) return row
+        const targetCandidateId = result.duplicate_link_prevented
+          ? result.existingCandidateId
+          : payload.candidateId
+        if (!targetCandidateId) return row
         const nextCandidates = (row.detectedCandidates || []).map((candidate) =>
-          candidate.candidate_id === payload.candidateId
+          candidate.candidate_id === targetCandidateId
             ? {
                 ...candidate,
                 rl_place_id: payload.rlPlaceId,
@@ -571,14 +607,14 @@ export function useArticlePoiRemoveCandidate(siteId?: string) {
 
 export function useArticlePoiCreateRl(siteId?: string) {
   const queryClient = useQueryClient()
-  return useMutation({
-    mutationFn: async (payload: {
+  return useMutation<
+    CreateRlResponse,
+    Error,
+    Omit<CreateRlBody, "siteId"> & {
       articleId: string
-      regionId?: string
-      name?: string
-      placeType?: string
-      candidateId?: string
-    }) => {
+    }
+  >({
+    mutationFn: async (payload) => {
       if (!siteId) throw new Error("No site selected")
       const res = await ingestionFetch(ingestionApiUrl(`/api/v1/article-poi/${payload.articleId}/create-rl`), {
         method: "POST",
@@ -588,12 +624,32 @@ export function useArticlePoiCreateRl(siteId?: string) {
           regionId: payload.regionId,
           candidateId: payload.candidateId,
           name: payload.name,
+          placeName: payload.placeName,
           placeType: payload.placeType,
+          clusterId: payload.clusterId,
+          clusterName: payload.clusterName,
+          blocks: payload.blocks,
+          payload: payload.payload,
         }),
       })
-      const data = (await res.json().catch(() => ({}))) as { error?: string; rl_write_target?: string }
+      const data = (await res.json().catch(() => ({}))) as {
+        success?: boolean
+        articleId?: string
+        createdRlPlaceId?: string
+        duplicate_link_prevented?: boolean
+        existingCandidateId?: string
+        error?: string
+        rl_write_target?: string
+      }
       if (!res.ok) throw new Error(data.error || "Failed to create RL place")
-      return data
+      return {
+        success: !!data.success,
+        articleId: data.articleId || payload.articleId,
+        createdRlPlaceId: data.createdRlPlaceId,
+        rl_write_target: data.rl_write_target,
+        duplicate_link_prevented: data.duplicate_link_prevented === true,
+        existingCandidateId: data.existingCandidateId,
+      } satisfies CreateRlResponse
     },
     onSuccess: () => {
       invalidateBacklog(queryClient, siteId)

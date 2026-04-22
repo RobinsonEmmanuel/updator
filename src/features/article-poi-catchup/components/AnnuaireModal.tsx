@@ -1,4 +1,4 @@
-import { Link2, Loader2, X } from "lucide-react"
+import { Link2, Loader2, PlusCircle, X } from "lucide-react"
 import { cn } from "@/lib/utils"
 import { decodeHtmlEntities } from "@/features/article-poi-catchup/domain"
 import type { RegionPoiLite } from "@/hooks"
@@ -24,11 +24,21 @@ interface AnnuaireModalProps {
   availableClusterNames: string[]
   availableTypeLabels: string[]
   filteredRegionPois: RegionPoiLite[]
+  linkedRlPlaceIds: string[]
   showRegionPoiSearchSpinner: boolean
   showRegionPoiLoadingPlaceholder: boolean
   selectedRegionPoi: SelectedRegionPoi | null
   onSelectRegionPoi: (poi: SelectedRegionPoi) => void
   mutationPending: boolean
+  createPoiName: string
+  onCreatePoiNameChange: (value: string) => void
+  createPoiType: string
+  onCreatePoiTypeChange: (value: string) => void
+  createPoiTypeOptions: Array<{ value: string; label: string }>
+  createPoiClusterId: string
+  onCreatePoiClusterIdChange: (value: string) => void
+  createPoiClusterOptions: Array<{ value: string; label: string }>
+  onCreatePoi: () => void
   onClose: () => void
   onValidateLink: () => void
 }
@@ -46,11 +56,21 @@ export function AnnuaireModal({
   availableClusterNames,
   availableTypeLabels,
   filteredRegionPois,
+  linkedRlPlaceIds,
   showRegionPoiSearchSpinner,
   showRegionPoiLoadingPlaceholder,
   selectedRegionPoi,
   onSelectRegionPoi,
   mutationPending,
+  createPoiName,
+  onCreatePoiNameChange,
+  createPoiType,
+  onCreatePoiTypeChange,
+  createPoiTypeOptions,
+  createPoiClusterId,
+  onCreatePoiClusterIdChange,
+  createPoiClusterOptions,
+  onCreatePoi,
   onClose,
   onValidateLink,
 }: AnnuaireModalProps) {
@@ -123,10 +143,13 @@ export function AnnuaireModal({
                   Recherche des POI en cours...
                 </div>
               ) : null}
-              {filteredRegionPois.map((poi) => (
+              {filteredRegionPois.map((poi) => {
+                const alreadyLinked = linkedRlPlaceIds.includes(poi.rl_place_id)
+                return (
                 <button
                   key={poi.rl_place_id}
                   type="button"
+                  disabled={alreadyLinked}
                   onClick={() =>
                     onSelectRegionPoi({
                       rl_place_id: poi.rl_place_id,
@@ -138,6 +161,7 @@ export function AnnuaireModal({
                   }
                   className={cn(
                     "w-full text-left rounded border px-2 py-1.5 hover:bg-stone-50",
+                    alreadyLinked && "opacity-50 cursor-not-allowed",
                     selectedRegionPoi?.rl_place_id === poi.rl_place_id
                       ? "border-orange-300 bg-orange-50"
                       : "border-stone-100"
@@ -147,8 +171,12 @@ export function AnnuaireModal({
                   <div className="text-[11px] text-stone-500">
                     {decodeHtmlEntities(poi.place_type_label_fr || poi.place_type)} · {(poi.cluster_names || [])[0] || "Cluster inconnu"}
                   </div>
+                  {alreadyLinked ? (
+                    <div className="text-[11px] text-emerald-700 mt-0.5">Déjà lié sur cet article</div>
+                  ) : null}
                 </button>
-              ))}
+                )
+              })}
               {!showRegionPoiLoadingPlaceholder && filteredRegionPois.length === 0 && (
                 <div className="text-xs text-stone-500 p-1">Aucun POI trouvé avec ces filtres.</div>
               )}
@@ -178,6 +206,51 @@ export function AnnuaireModal({
               Valider et lier
             </button>
             <div className="text-[11px] text-stone-500">Article: {decodeHtmlEntities(articleTitle)}</div>
+          </div>
+
+          <div className="space-y-2 pt-2 border-t border-stone-200">
+            <div className="text-xs text-stone-500">POI introuvable ? Créer un POI RL</div>
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-2">
+              <input
+                value={createPoiName}
+                onChange={(event) => onCreatePoiNameChange(event.target.value)}
+                placeholder="Nom du POI (ex: Hotel The View)"
+                className="w-full px-3 py-2 rounded-lg border border-stone-200 text-sm"
+              />
+              <select
+                value={createPoiType}
+                onChange={(event) => onCreatePoiTypeChange(event.target.value)}
+                className="w-full px-3 py-2 rounded-lg border border-stone-200 text-sm bg-white"
+              >
+                <option value="">Type de POI</option>
+                {createPoiTypeOptions.map((option) => (
+                  <option key={option.value} value={option.value}>
+                    {option.label}
+                  </option>
+                ))}
+              </select>
+              <select
+                value={createPoiClusterId}
+                onChange={(event) => onCreatePoiClusterIdChange(event.target.value)}
+                className="w-full px-3 py-2 rounded-lg border border-stone-200 text-sm bg-white"
+              >
+                <option value="">Cluster du POI</option>
+                {createPoiClusterOptions.map((option) => (
+                  <option key={option.value} value={option.value}>
+                    {option.label}
+                  </option>
+                ))}
+              </select>
+            </div>
+            <button
+              type="button"
+              disabled={mutationPending || !createPoiName.trim() || !createPoiType.trim() || !createPoiClusterId.trim()}
+              onClick={onCreatePoi}
+              className="inline-flex items-center gap-1.5 px-3 py-2 rounded-lg text-xs border border-emerald-200 bg-emerald-50 text-emerald-700 hover:bg-emerald-100 disabled:opacity-60"
+            >
+              <PlusCircle className="h-3.5 w-3.5" />
+              Créer et lier automatiquement
+            </button>
           </div>
         </div>
       </div>

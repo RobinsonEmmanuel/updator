@@ -639,9 +639,21 @@ export function useArticlePoiCreateRl(siteId?: string) {
         duplicate_link_prevented?: boolean
         existingCandidateId?: string
         error?: string
+        status?: number
+        details?: unknown
         rl_write_target?: string
       }
-      if (!res.ok) throw new Error(data.error || "Failed to create RL place")
+      if (!res.ok) {
+        const detailMessage =
+          typeof data.details === "string"
+            ? data.details
+            : data.details && typeof data.details === "object"
+              ? JSON.stringify(data.details)
+              : ""
+        const statusMessage = typeof data.status === "number" ? ` (RL ${data.status})` : ""
+        const suffix = detailMessage ? `: ${detailMessage}` : ""
+        throw new Error(`${data.error || "Failed to create RL place"}${statusMessage}${suffix}`)
+      }
       return {
         success: !!data.success,
         articleId: data.articleId || payload.articleId,

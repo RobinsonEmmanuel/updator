@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, type MouseEvent } from "react"
-import { RefreshCw, Search, Link2, Sparkles, X, Info, BookOpen, Trash2, ChevronDown } from "lucide-react"
+import { RefreshCw, Search, Sparkles, X, ChevronDown } from "lucide-react"
 import { SiteCardsGrid } from "@/components/shared"
 import { useSiteContext } from "@/lib/SiteContext"
 import {
@@ -654,612 +654,171 @@ export function PoiArticleCatchup() {
                   >
                     {[...linkedPanelCandidateGroups, ...unlinkedPanelCandidateGroups].map((group, index) => {
                       const firstUnlinkedIndex = linkedPanelCandidateGroups.length
-                      const showUnlinkedHeader = unlinkedPanelCandidateGroups.length > 0 && index === firstUnlinkedIndex
+                      const showUnlinkedHeader =
+                        unlinkedPanelCandidateGroups.length > 0 && index === firstUnlinkedIndex
                       const expanded = !!expandedCandidateInfo[group.candidate_id]
-                      const baseSuggestions = group.suggestions || []
-                      const isLinkedCandidate = !!group.rl_place_id
-                      const linkedPoi = group.rl_place_id ? regionPoiById.get(group.rl_place_id) : undefined
-                      const linkedTypeKey = (group.rl_place_type || linkedPoi?.place_type || "").trim().toLowerCase()
-                      const linkedTypeLabel = decodeHtmlEntities(
-                        group.rl_place_type_label_fr ||
-                          linkedPoi?.place_type_label_fr ||
-                          (linkedTypeKey ? placeTypeLabelByType.get(linkedTypeKey) : "") ||
-                          group.rl_place_type ||
-                          linkedPoi?.place_type ||
-                          "Type inconnu"
-                      )
-                      const linkedClusterName = decodeHtmlEntities(
-                        group.rl_cluster_name || linkedPoi?.cluster_names?.[0] || "Cluster inconnu"
-                      )
-                      const linkedClusterMeta =
-                        group.rl_cluster_id ||
-                        linkedPoi?.cluster_ids?.[0] ||
-                        null
-                      if (isLinkedCandidate && linkedClusterName === "Cluster inconnu") {
-                        logUnknownMeta("linked", group.candidate_id, group.rl_place_id || group.candidate_id, "missing_cluster", {
-                          candidateCluster: group.rl_cluster_name,
-                          poiCluster: linkedPoi?.cluster_names,
-                        })
-                      }
-                      if (isLinkedCandidate && linkedTypeLabel === "Type inconnu") {
-                        logUnknownMeta("linked", group.candidate_id, group.rl_place_id || group.candidate_id, "missing_type", {
-                          candidateType: group.rl_place_type,
-                          candidateTypeLabel: group.rl_place_type_label_fr,
-                          poiType: linkedPoi?.place_type,
-                          poiTypeLabel: linkedPoi?.place_type_label_fr,
-                        })
-                      }
-                      const suggestions = isLinkedCandidate ? [] : baseSuggestions
-                      const linkedDisplayName = decodeHtmlEntities(
-                        group.rl_place_name || linkedPoi?.name || group.name
-                      )
-                      if (group.candidate_id) {
-                        return (
-                          <DetailCandidateCard
-                            key={group.candidate_id}
-                            group={group}
-                            expanded={expanded}
-                            mutationPending={mutationPending}
-                            recomputePending={
-                              recomputeCandidate.isPending &&
-                              recomputeCandidateInFlightId === group.candidate_id
-                            }
-                            unlinkConfirmOpen={unlinkConfirmCandidateId === group.candidate_id}
-                            removeConfirmOpen={removeConfirmCandidateId === group.candidate_id}
-                            linkedRlPlaceIdsInPanel={linkedRlPlaceIdsInPanel}
-                            regionPoiById={regionPoiById}
-                            placeTypeLabelByType={placeTypeLabelByType}
-                            showUnlinkedHeader={showUnlinkedHeader}
-                            showSuggestionHeader
-                            logUnknownMeta={logUnknownMeta}
-                            onFocusCandidate={(candidateId) => {
-                              setSelectedCandidateId(candidateId)
-                              setFocusedCandidateId(candidateId)
-                              const candidateSectionIds = candidateSectionIdsMap.get(candidateId) || []
-                              if (candidateSectionIds.length > 0) {
-                                setOpenSectionIds((prev) => {
-                                  const merged = new Set(prev)
-                                  candidateSectionIds.forEach((id: string) => merged.add(id))
-                                  return Array.from(merged)
-                                })
-                              }
-                            }}
-                            onToggleInfo={(candidateId) =>
-                              setExpandedCandidateInfo((prev) => ({
-                                ...prev,
-                                [candidateId]: !prev[candidateId],
-                              }))
-                            }
-                            onRecomputeCandidate={(candidate) =>
-                              triggerRecomputeCandidate(
-                                linkPanelRow,
-                                candidate.candidate_id,
-                                candidate.name
-                              )
-                            }
-                            onOpenAnnuaire={(candidate) => {
-                              setSelectedCandidateId(candidate.candidate_id)
-                              setAnnuaireModalCandidateId(candidate.candidate_id)
-                              setSelectedRegionPoi(null)
-                              setCreatePoiName(decodeHtmlEntities(candidate.name))
-                              setCreatePoiType("")
-                              setCreatePoiClusterId("")
-                            }}
-                            onToggleUnlinkConfirm={(candidateId) =>
-                              setUnlinkConfirmCandidateId((prev) =>
-                                prev === candidateId ? null : candidateId
-                              )
-                            }
-                            onConfirmUnlink={(candidate) =>
-                              unlinkPoi.mutate(
-                                {
-                                  articleId: linkPanelRow.articleId,
-                                  candidateId: candidate.candidate_id,
-                                },
-                                {
-                                  onSuccess: () => {
-                                    setUnlinkConfirmCandidateId(null)
-                                    applyUnlinkedCandidateInPanel(candidate.candidate_id)
-                                    void backlog.refetch()
-                                    pushLog(
-                                      "success",
-                                      `Liaison retirée (${decodeHtmlEntities(linkPanelRow.title)}) · candidat ${decodeHtmlEntities(candidate.name)}`
-                                    )
-                                  },
-                                  onError: (error) =>
-                                    pushLog(
-                                      "error",
-                                      `Erreur retrait liaison (${decodeHtmlEntities(linkPanelRow.title)}): ${error.message}`
-                                    ),
-                                }
-                              )
-                            }
-                            onToggleRemoveConfirm={(candidateId) =>
-                              setRemoveConfirmCandidateId((prev) =>
-                                prev === candidateId ? null : candidateId
-                              )
-                            }
-                            onConfirmRemove={(candidate) =>
-                              removeCandidate.mutate(
-                                {
-                                  articleId: linkPanelRow.articleId,
-                                  candidateId: candidate.candidate_id,
-                                },
-                                {
-                                  onSuccess: () => {
-                                    setRemoveConfirmCandidateId(null)
-                                    setUnlinkConfirmCandidateId(null)
-                                    applyRemovedCandidateInPanel(candidate.candidate_id)
-                                    pushLog(
-                                      "success",
-                                      `Candidat supprimé (${decodeHtmlEntities(linkPanelRow.title)}) · ${decodeHtmlEntities(candidate.name)}`
-                                    )
-                                  },
-                                  onError: (error) =>
-                                    pushLog(
-                                      "error",
-                                      `Erreur suppression candidat (${decodeHtmlEntities(linkPanelRow.title)}): ${error.message}`
-                                    ),
-                                }
-                              )
-                            }
-                            onSuggestionLink={({
-                              group: selectedGroup,
-                              suggestion,
-                              typeLabel,
-                              clusterLabel,
-                            }) =>
-                              manualLink.mutate(
-                                {
-                                  articleId: linkPanelRow.articleId,
-                                  rlPlaceId: suggestion.rl_place_id,
-                                  rlPlaceName: suggestion.name,
-                                  placeType: suggestion.place_type,
-                                  placeTypeLabelFr: typeLabel,
-                                  clusterId: suggestion.cluster_id,
-                                  clusterName: clusterLabel,
-                                  candidateId: selectedGroup.candidate_id,
-                                  confidence: "high",
-                                  score: suggestion.score ?? 1,
-                                  validated: true,
-                                },
-                                {
-                                  onSuccess: (res) => {
-                                    if (
-                                      res.duplicate_link_prevented &&
-                                      res.existingCandidateId
-                                    ) {
-                                      applyLinkedCandidateInPanel({
-                                        candidateId: res.existingCandidateId,
-                                        rlPlaceId: suggestion.rl_place_id,
-                                        rlPlaceName: suggestion.name,
-                                        placeType: suggestion.place_type,
-                                        placeTypeLabelFr: typeLabel,
-                                        clusterId: suggestion.cluster_id,
-                                        clusterName: clusterLabel,
-                                      })
-                                      pushLog(
-                                        "info",
-                                        `POI déjà lié sur cet article, liaison conservée (${decodeHtmlEntities(linkPanelRow.title)})`
-                                      )
-                                    } else {
-                                      applyLinkedCandidateInPanel({
-                                        candidateId: selectedGroup.candidate_id,
-                                        rlPlaceId: suggestion.rl_place_id,
-                                        rlPlaceName: suggestion.name,
-                                        placeType: suggestion.place_type,
-                                        placeTypeLabelFr: typeLabel,
-                                        clusterId: suggestion.cluster_id,
-                                        clusterName: clusterLabel,
-                                      })
-                                    }
-                                    void backlog.refetch()
-                                    pushLog(
-                                      "success",
-                                      `Liaison OK (${decodeHtmlEntities(linkPanelRow.title)}) -> ${suggestion.rl_place_id}`
-                                    )
-                                  },
-                                  onError: (error) =>
-                                    pushLog(
-                                      "error",
-                                      `Erreur liaison manuelle (${decodeHtmlEntities(linkPanelRow.title)}): ${error.message}`
-                                    ),
-                                }
-                              )
-                            }
-                          />
-                        )
-                      }
                       return (
-                        <div key={group.candidate_id} className="space-y-2">
-                          {showUnlinkedHeader ? (
-                            <div className="text-[11px] font-medium uppercase tracking-wide text-stone-500 bg-stone-50/80 border border-stone-200 rounded px-2 py-1">
-                              Candidats à valider ({unlinkedPanelCandidateGroups.length})
-                            </div>
-                          ) : null}
-                        <div
-                          className={cn(
-                            "relative rounded-lg border p-2.5 pr-24",
-                            isLinkedCandidate
-                              ? "border-emerald-200 bg-emerald-50/30"
-                              : "border-stone-200 bg-white"
-                          )}
-                        >
-                          <div className="flex items-center justify-between gap-2">
-                            <button
-                              type="button"
-                              onClick={() => {
-                                setSelectedCandidateId(group.candidate_id)
-                                setFocusedCandidateId(group.candidate_id)
-                                const candidateSectionIds = candidateSectionIdsMap.get(group.candidate_id) || []
-                                if (candidateSectionIds.length > 0) {
-                                  setOpenSectionIds((prev) => {
-                                    const merged = new Set(prev)
-                                    candidateSectionIds.forEach((id: string) => merged.add(id))
-                                    return Array.from(merged)
-                                  })
-                                }
-                              }}
-                              className="text-left min-w-0 flex-1"
-                            >
-                              <div className="text-sm font-medium text-stone-800 break-words">
-                                {isLinkedCandidate ? linkedDisplayName : decodeHtmlEntities(group.name)}
-                              </div>
-                              <div className="text-xs text-stone-500 mt-0.5">
-                                {isLinkedCandidate
-                                  ? `POI RL validé`
-                                  : `Score ${Math.round((group.mention_score || 0) * 100)}% · ${suggestions.length} rapprochement(s)`}
-                              </div>
-                              {!isLinkedCandidate ? (
-                                <div className="mt-0.5 text-[11px] text-stone-500">
-                                  Candidat détecté: {decodeHtmlEntities(group.name)}
-                                </div>
-                              ) : null}
-                              {isLinkedCandidate ? (
-                                <div className="mt-1 text-[11px] text-stone-600 leading-relaxed">
-                                  <span>{linkedTypeLabel}</span>
-                                  <span className="text-stone-400"> · </span>
-                                  <span>{linkedClusterName}</span>
-                                </div>
-                              ) : null}
-                            </button>
-                            <div className="absolute top-2 right-2 flex items-center gap-1.5">
-                              <button
-                                type="button"
-                                onClick={() =>
-                                  setExpandedCandidateInfo((prev) => ({
-                                    ...prev,
-                                    [group.candidate_id]: !expanded,
-                                  }))
-                                }
-                                className="inline-flex items-center justify-center h-8 w-8 rounded border border-stone-200 text-stone-600 hover:bg-stone-50"
-                                title="Voir les infos du candidat"
-                                aria-label="Voir les infos du candidat"
-                              >
-                                <Info className="h-4 w-4" />
-                              </button>
-                              {!isLinkedCandidate ? (
-                                <button
-                                  type="button"
-                                  onClick={() =>
-                                    triggerRecomputeCandidate(
-                                      linkPanelRow,
-                                      group.candidate_id,
-                                      group.name
-                                    )
-                                  }
-                                  disabled={mutationPending}
-                                  className="inline-flex items-center justify-center h-8 w-8 rounded border border-stone-200 bg-stone-50 text-stone-700 hover:bg-stone-100 disabled:opacity-60"
-                                  title="Relancer le scan POI réel pour ce candidat"
-                                  aria-label="Relancer le scan POI réel pour ce candidat"
-                                >
-                                  <RefreshCw
-                                    className={cn(
-                                      "h-4 w-4",
-                                      recomputeCandidate.isPending &&
-                                        recomputeCandidateInFlightId === group.candidate_id &&
-                                        "animate-spin"
-                                    )}
-                                  />
-                                </button>
-                              ) : null}
-                              {!isLinkedCandidate ? (
-                                <button
-                                  type="button"
-                                  onClick={() => {
-                                    setSelectedCandidateId(group.candidate_id)
-                                    setAnnuaireModalCandidateId(group.candidate_id)
-                                    setSelectedRegionPoi(null)
-                                    setCreatePoiName(decodeHtmlEntities(group.name))
-                                    setCreatePoiType("")
-                                    setCreatePoiClusterId("")
-                                  }}
-                                  className="inline-flex items-center justify-center h-8 w-8 rounded border border-orange-200 bg-orange-50 text-orange-700 hover:bg-orange-100"
-                                  title="Ouvrir l'annuaire RL"
-                                  aria-label="Ouvrir l'annuaire RL"
-                                >
-                                  <BookOpen className="h-4 w-4" />
-                                </button>
-                              ) : null}
-                              {isLinkedCandidate ? (
-                                <div className="relative">
-                                  <button
-                                    type="button"
-                                    onClick={() =>
-                                      setUnlinkConfirmCandidateId((prev) =>
-                                        prev === group.candidate_id ? null : group.candidate_id
-                                      )
-                                    }
-                                    disabled={mutationPending}
-                                    className="inline-flex items-center justify-center h-8 w-8 rounded border border-red-300 bg-red-50 text-red-700 hover:bg-red-100 disabled:opacity-60"
-                                    title="Retirer la liaison RL de ce candidat"
-                                    aria-label="Retirer la liaison RL de ce candidat"
-                                  >
-                                    <Link2 className="h-4 w-4" />
-                                  </button>
-                                  {unlinkConfirmCandidateId === group.candidate_id ? (
-                                    <div className="absolute right-0 mt-1 z-20 w-56 rounded-md border border-red-200 bg-white shadow-sm p-2 text-[11px] text-stone-700">
-                                      <div className="mb-2">Confirmer le retrait du POI lié pour ce candidat ?</div>
-                                      <div className="flex items-center justify-end gap-1.5">
-                                        <button
-                                          type="button"
-                                          onClick={() => setUnlinkConfirmCandidateId(null)}
-                                          className="px-2 py-1 rounded border border-stone-200 text-stone-600 hover:bg-stone-50"
-                                        >
-                                          Annuler
-                                        </button>
-                                        <button
-                                          type="button"
-                                          onClick={() =>
-                                            unlinkPoi.mutate(
-                                              {
-                                                articleId: linkPanelRow.articleId,
-                                                candidateId: group.candidate_id,
-                                              },
-                                              {
-                                                onSuccess: () => {
-                                                  setUnlinkConfirmCandidateId(null)
-                                                  applyUnlinkedCandidateInPanel(group.candidate_id)
-                                                  void backlog.refetch()
-                                                  pushLog(
-                                                    "success",
-                                                    `Liaison retirée (${decodeHtmlEntities(linkPanelRow.title)}) · candidat ${decodeHtmlEntities(group.name)}`
-                                                  )
-                                                },
-                                                onError: (error) =>
-                                                  pushLog(
-                                                    "error",
-                                                    `Erreur retrait liaison (${decodeHtmlEntities(linkPanelRow.title)}): ${error.message}`
-                                                  ),
-                                              }
-                                            )
-                                          }
-                                          disabled={mutationPending}
-                                          className="px-2 py-1 rounded border border-red-300 bg-red-50 text-red-700 hover:bg-red-100 disabled:opacity-60"
-                                        >
-                                          Confirmer
-                                        </button>
-                                      </div>
-                                    </div>
-                                  ) : null}
-                                </div>
-                              ) : null}
-                              <div className="relative">
-                                <button
-                                  type="button"
-                                  onClick={() =>
-                                    setRemoveConfirmCandidateId((prev) =>
-                                      prev === group.candidate_id ? null : group.candidate_id
-                                    )
-                                  }
-                                  disabled={mutationPending}
-                                  className="inline-flex items-center justify-center h-8 w-8 rounded border border-red-300 bg-white text-red-700 hover:bg-red-50 disabled:opacity-60"
-                                  title="Supprimer complètement ce candidat"
-                                  aria-label="Supprimer complètement ce candidat"
-                                >
-                                  <Trash2 className="h-4 w-4" />
-                                </button>
-                                {removeConfirmCandidateId === group.candidate_id ? (
-                                  <div className="absolute right-0 mt-1 z-20 w-64 rounded-md border border-red-200 bg-white shadow-sm p-2 text-[11px] text-stone-700">
-                                    <div className="mb-2">
-                                      Supprimer définitivement ce candidat hors sujet
-                                      {isLinkedCandidate ? " (avec son lien RL)" : ""} ?
-                                    </div>
-                                    <div className="flex items-center justify-end gap-1.5">
-                                      <button
-                                        type="button"
-                                        onClick={() => setRemoveConfirmCandidateId(null)}
-                                        className="px-2 py-1 rounded border border-stone-200 text-stone-600 hover:bg-stone-50"
-                                      >
-                                        Annuler
-                                      </button>
-                                      <button
-                                        type="button"
-                                        onClick={() =>
-                                          removeCandidate.mutate(
-                                            {
-                                              articleId: linkPanelRow.articleId,
-                                              candidateId: group.candidate_id,
-                                            },
-                                            {
-                                              onSuccess: () => {
-                                                setRemoveConfirmCandidateId(null)
-                                                setUnlinkConfirmCandidateId(null)
-                                                applyRemovedCandidateInPanel(group.candidate_id)
-                                                pushLog(
-                                                  "success",
-                                                  `Candidat supprimé (${decodeHtmlEntities(linkPanelRow.title)}) · ${decodeHtmlEntities(group.name)}`
-                                                )
-                                              },
-                                              onError: (error) =>
-                                                pushLog(
-                                                  "error",
-                                                  `Erreur suppression candidat (${decodeHtmlEntities(linkPanelRow.title)}): ${error.message}`
-                                                ),
-                                            }
-                                          )
-                                        }
-                                        disabled={mutationPending}
-                                        className="px-2 py-1 rounded border border-red-300 bg-red-50 text-red-700 hover:bg-red-100 disabled:opacity-60"
-                                      >
-                                        Supprimer
-                                      </button>
-                                    </div>
-                                  </div>
-                                ) : null}
-                              </div>
-                            </div>
-                          </div>
-
-                          {expanded && (
-                            <div className="mt-2 text-xs text-stone-600 space-y-1">
-                              <div><strong>Occurrences (freq):</strong> {group.frequency}</div>
-                              <div><strong>Hits titres (h):</strong> {group.heading_hits} sur H1/H2/H3</div>
-                              <div><strong>Suggestions RL (sugg):</strong> {suggestions.length}</div>
-                              {isLinkedCandidate ? (
-                                <>
-                                  <div><strong>Place type (clé):</strong> {group.rl_place_type || linkedPoi?.place_type || "—"}</div>
-                                  <div><strong>Cluster (id):</strong> {linkedClusterMeta || "—"}</div>
-                                  <div><strong>POI RL id:</strong> {group.rl_place_id || "—"}</div>
-                                </>
-                              ) : null}
-                            </div>
-                          )}
-
-                          {!isLinkedCandidate ? (
-                            <div className="mt-3 space-y-2">
-                              <div className="text-[11px] font-medium text-stone-500 uppercase tracking-wide">
-                                Rapprochements RL à valider
-                              </div>
-                              {suggestions.length > 0 ? (
-                              <div className="space-y-1">
-                                {suggestions.slice(0, 8).map((s) => {
-                                  const alreadyLinkedOnArticle = linkedRlPlaceIdsInPanel.includes(s.rl_place_id)
-                                  const fallbackPoi = regionPoiById.get(s.rl_place_id)
-                                  const typeKey = (s.place_type || fallbackPoi?.place_type || "").trim().toLowerCase()
-                                  const typeLabel = decodeHtmlEntities(
-                                    s.place_type_label_fr ||
-                                      fallbackPoi?.place_type_label_fr ||
-                                      (typeKey ? placeTypeLabelByType.get(typeKey) : "") ||
-                                      s.place_type ||
-                                      fallbackPoi?.place_type ||
-                                      "Type inconnu"
+                        <DetailCandidateCard
+                          key={group.candidate_id}
+                          group={group}
+                          expanded={expanded}
+                          mutationPending={mutationPending}
+                          recomputePending={
+                            recomputeCandidate.isPending &&
+                            recomputeCandidateInFlightId === group.candidate_id
+                          }
+                          unlinkConfirmOpen={unlinkConfirmCandidateId === group.candidate_id}
+                          removeConfirmOpen={removeConfirmCandidateId === group.candidate_id}
+                          linkedRlPlaceIdsInPanel={linkedRlPlaceIdsInPanel}
+                          regionPoiById={regionPoiById}
+                          placeTypeLabelByType={placeTypeLabelByType}
+                          showUnlinkedHeader={showUnlinkedHeader}
+                          showSuggestionHeader={showUnlinkedHeader}
+                          logUnknownMeta={logUnknownMeta}
+                          onFocusCandidate={(candidateId) => {
+                            setSelectedCandidateId(candidateId)
+                            setFocusedCandidateId(candidateId)
+                            const candidateSectionIds = candidateSectionIdsMap.get(candidateId) || []
+                            if (candidateSectionIds.length > 0) {
+                              setOpenSectionIds((prev) => {
+                                const merged = new Set(prev)
+                                candidateSectionIds.forEach((id: string) => merged.add(id))
+                                return Array.from(merged)
+                              })
+                            }
+                          }}
+                          onToggleInfo={(candidateId) =>
+                            setExpandedCandidateInfo((prev) => ({
+                              ...prev,
+                              [candidateId]: !prev[candidateId],
+                            }))
+                          }
+                          onRecomputeCandidate={(candidate) =>
+                            triggerRecomputeCandidate(linkPanelRow, candidate.candidate_id, candidate.name)
+                          }
+                          onOpenAnnuaire={(candidate) => {
+                            setSelectedCandidateId(candidate.candidate_id)
+                            setAnnuaireModalCandidateId(candidate.candidate_id)
+                            setSelectedRegionPoi(null)
+                            setCreatePoiName(decodeHtmlEntities(candidate.name))
+                            setCreatePoiType("")
+                            setCreatePoiClusterId("")
+                          }}
+                          onToggleUnlinkConfirm={(candidateId) =>
+                            setUnlinkConfirmCandidateId((prev) =>
+                              prev === candidateId ? null : candidateId
+                            )
+                          }
+                          onConfirmUnlink={(candidate) =>
+                            unlinkPoi.mutate(
+                              {
+                                articleId: linkPanelRow.articleId,
+                                candidateId: candidate.candidate_id,
+                              },
+                              {
+                                onSuccess: () => {
+                                  setUnlinkConfirmCandidateId(null)
+                                  applyUnlinkedCandidateInPanel(candidate.candidate_id)
+                                  void backlog.refetch()
+                                  pushLog(
+                                    "success",
+                                    `Liaison retirée (${decodeHtmlEntities(linkPanelRow.title)}) · candidat ${decodeHtmlEntities(candidate.name)}`
                                   )
-                                  const clusterLabel = decodeHtmlEntities(
-                                    s.cluster_name || s.cluster_names?.[0] || fallbackPoi?.cluster_names?.[0] || "Cluster inconnu"
+                                },
+                                onError: (error) =>
+                                  pushLog(
+                                    "error",
+                                    `Erreur retrait liaison (${decodeHtmlEntities(linkPanelRow.title)}): ${error.message}`
+                                  ),
+                              }
+                            )
+                          }
+                          onToggleRemoveConfirm={(candidateId) =>
+                            setRemoveConfirmCandidateId((prev) =>
+                              prev === candidateId ? null : candidateId
+                            )
+                          }
+                          onConfirmRemove={(candidate) =>
+                            removeCandidate.mutate(
+                              {
+                                articleId: linkPanelRow.articleId,
+                                candidateId: candidate.candidate_id,
+                              },
+                              {
+                                onSuccess: () => {
+                                  setRemoveConfirmCandidateId(null)
+                                  setUnlinkConfirmCandidateId(null)
+                                  applyRemovedCandidateInPanel(candidate.candidate_id)
+                                  pushLog(
+                                    "success",
+                                    `Candidat supprimé (${decodeHtmlEntities(linkPanelRow.title)}) · ${decodeHtmlEntities(candidate.name)}`
                                   )
-                                  if (clusterLabel === "Cluster inconnu") {
-                                    logUnknownMeta("suggestion", group.candidate_id, s.rl_place_id, "missing_cluster", {
-                                      suggestionCluster: s.cluster_name,
-                                      suggestionClusterNames: s.cluster_names,
-                                      poiCluster: fallbackPoi?.cluster_names,
+                                },
+                                onError: (error) =>
+                                  pushLog(
+                                    "error",
+                                    `Erreur suppression candidat (${decodeHtmlEntities(linkPanelRow.title)}): ${error.message}`
+                                  ),
+                              }
+                            )
+                          }
+                          onSuggestionLink={({ group: selectedGroup, suggestion, typeLabel, clusterLabel }) =>
+                            manualLink.mutate(
+                              {
+                                articleId: linkPanelRow.articleId,
+                                rlPlaceId: suggestion.rl_place_id,
+                                rlPlaceName: suggestion.name,
+                                placeType: suggestion.place_type,
+                                placeTypeLabelFr: typeLabel,
+                                clusterId: suggestion.cluster_id,
+                                clusterName: clusterLabel,
+                                candidateId: selectedGroup.candidate_id,
+                                confidence: "high",
+                                score: suggestion.score ?? 1,
+                                validated: true,
+                              },
+                              {
+                                onSuccess: (res) => {
+                                  if (res.duplicate_link_prevented && res.existingCandidateId) {
+                                    applyLinkedCandidateInPanel({
+                                      candidateId: res.existingCandidateId,
+                                      rlPlaceId: suggestion.rl_place_id,
+                                      rlPlaceName: suggestion.name,
+                                      placeType: suggestion.place_type,
+                                      placeTypeLabelFr: typeLabel,
+                                      clusterId: suggestion.cluster_id,
+                                      clusterName: clusterLabel,
+                                    })
+                                    pushLog(
+                                      "info",
+                                      `POI déjà lié sur cet article, liaison conservée (${decodeHtmlEntities(linkPanelRow.title)})`
+                                    )
+                                  } else {
+                                    applyLinkedCandidateInPanel({
+                                      candidateId: selectedGroup.candidate_id,
+                                      rlPlaceId: suggestion.rl_place_id,
+                                      rlPlaceName: suggestion.name,
+                                      placeType: suggestion.place_type,
+                                      placeTypeLabelFr: typeLabel,
+                                      clusterId: suggestion.cluster_id,
+                                      clusterName: clusterLabel,
                                     })
                                   }
-                                  if (typeLabel === "Type inconnu") {
-                                    logUnknownMeta("suggestion", group.candidate_id, s.rl_place_id, "missing_type", {
-                                      suggestionType: s.place_type,
-                                      suggestionTypeLabel: s.place_type_label_fr,
-                                      poiType: fallbackPoi?.place_type,
-                                      poiTypeLabel: fallbackPoi?.place_type_label_fr,
-                                    })
-                                  }
-                                  return (
-                                  <div key={s.rl_place_id} className="flex items-stretch gap-1">
-                                    <button
-                                      type="button"
-                                      disabled={alreadyLinkedOnArticle}
-                                      onClick={() =>
-                                        !alreadyLinkedOnArticle &&
-                                        manualLink.mutate(
-                                          {
-                                            articleId: linkPanelRow.articleId,
-                                            rlPlaceId: s.rl_place_id,
-                                            rlPlaceName: s.name,
-                                            placeType: s.place_type,
-                                            placeTypeLabelFr: typeLabel,
-                                            clusterId: s.cluster_id,
-                                            clusterName: clusterLabel,
-                                            candidateId: group.candidate_id,
-                                            confidence: "high",
-                                            score: s.score ?? 1,
-                                            validated: true,
-                                          },
-                                          {
-                                            onSuccess: (res) =>
-                                              {
-                                                if (res.duplicate_link_prevented && res.existingCandidateId) {
-                                                  applyLinkedCandidateInPanel({
-                                                    candidateId: res.existingCandidateId,
-                                                    rlPlaceId: s.rl_place_id,
-                                                    rlPlaceName: s.name,
-                                                    placeType: s.place_type,
-                                                    placeTypeLabelFr: typeLabel,
-                                                    clusterId: s.cluster_id,
-                                                    clusterName: clusterLabel,
-                                                  })
-                                                  pushLog(
-                                                    "info",
-                                                    `POI déjà lié sur cet article, liaison conservée (${decodeHtmlEntities(linkPanelRow.title)})`
-                                                  )
-                                                } else {
-                                                  applyLinkedCandidateInPanel({
-                                                    candidateId: group.candidate_id,
-                                                    rlPlaceId: s.rl_place_id,
-                                                    rlPlaceName: s.name,
-                                                    placeType: s.place_type,
-                                                    placeTypeLabelFr: typeLabel,
-                                                    clusterId: s.cluster_id,
-                                                    clusterName: clusterLabel,
-                                                  })
-                                                }
-                                                void backlog.refetch()
-                                                pushLog(
-                                                  "success",
-                                                  `Liaison OK (${decodeHtmlEntities(linkPanelRow.title)}) -> ${s.rl_place_id}`
-                                                )
-                                              },
-                                            onError: (error) =>
-                                              pushLog("error", `Erreur liaison manuelle (${decodeHtmlEntities(linkPanelRow.title)}): ${error.message}`),
-                                          }
-                                        )
-                                      }
-                                      className={cn(
-                                        "flex-1 text-left rounded-lg border px-2.5 py-1.5 text-[11px]",
-                                        alreadyLinkedOnArticle
-                                          ? "border-emerald-200 bg-emerald-50 text-emerald-700 cursor-not-allowed"
-                                          : "border-stone-200 bg-white text-stone-700 hover:bg-orange-50"
-                                      )}
-                                    >
-                                      <div
-                                        className="leading-snug break-words"
-                                        style={{ display: "-webkit-box", WebkitLineClamp: 2, WebkitBoxOrient: "vertical", overflow: "hidden" }}
-                                      >
-                                        <span className="font-medium text-stone-800">{decodeHtmlEntities(s.name)}</span>
-                                        <span className="text-stone-500"> (suggestion RL)</span>
-                                        <span className="text-stone-500"> · </span>
-                                        <span className="text-stone-600">{typeLabel}</span>
-                                        <span className="text-stone-500"> · </span>
-                                        <span className="text-stone-600">{clusterLabel}</span>
-                                        <span className="text-stone-500"> · </span>
-                                        <span className="font-medium text-stone-700">{Math.round(s.score * 100)}%</span>
-                                      </div>
-                                      {alreadyLinkedOnArticle ? (
-                                        <div className="mt-1 text-[11px] text-emerald-700">Déjà lié sur cet article</div>
-                                      ) : null}
-                                    </button>
-                                  </div>
+                                  void backlog.refetch()
+                                  pushLog(
+                                    "success",
+                                    `Liaison OK (${decodeHtmlEntities(linkPanelRow.title)}) -> ${suggestion.rl_place_id}`
                                   )
-                                })}
-                              </div>
-                              ) : (
-                                <div className="text-xs text-stone-500 rounded-lg border border-stone-200 bg-stone-50 p-2">
-                                  Aucun rapprochement RL pour ce candidat.
-                                </div>
-                              )}
-                            </div>
-                          ) : null}
-                        </div>
-                        </div>
+                                },
+                                onError: (error) =>
+                                  pushLog(
+                                    "error",
+                                    `Erreur liaison manuelle (${decodeHtmlEntities(linkPanelRow.title)}): ${error.message}`
+                                  ),
+                              }
+                            )
+                          }
+                        />
                       )
                     })}
                   </CandidateListPanel>

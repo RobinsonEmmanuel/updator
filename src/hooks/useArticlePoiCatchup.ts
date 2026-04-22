@@ -675,8 +675,12 @@ export function useArticlePoiCreateRl(siteId?: string) {
         existingCandidateId: data.existingCandidateId,
       } satisfies CreateRlResponse
     },
-    onSuccess: () => {
+    onSuccess: async () => {
       invalidateBacklog(queryClient, siteId)
+      if (siteId) {
+        queryClient.invalidateQueries({ queryKey: ["article-poi-region-pois", siteId] })
+        await queryClient.refetchQueries({ queryKey: ["article-poi-region-pois", siteId], type: "active" })
+      }
     },
   })
 }
@@ -708,7 +712,8 @@ export function useArticlePoiRegionPois(params: { siteId?: string; q?: string; l
       const res = await ingestionFetch(ingestionApiUrl(`/api/v1/article-poi/region-pois?${qs.toString()}`))
       const data = (await res.json().catch(() => ({}))) as RegionPoisResponse & { error?: string }
       if (!res.ok) throw new Error(data.error || "Failed to load region POIs")
-      return Array.isArray(data.data) ? data.data : []
+      const rows = Array.isArray(data.data) ? data.data : []
+      return rows
     },
     enabled: !!siteId,
     staleTime: 45 * 1000,

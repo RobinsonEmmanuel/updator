@@ -79,7 +79,7 @@ export function useRegionPoiDirectoryOptions({
 
   const filteredRegionPois = useMemo(() => {
     const q = normalizeForMatch(regionPoiSearch)
-    return regionPois.filter((poi) => {
+    const filtered = regionPois.filter((poi) => {
       const placeTypeLabel = decodeHtmlEntities(poi.place_type_label_fr || poi.place_type || "")
       const clusterNames = (poi.cluster_names || []).map((name) => decodeHtmlEntities(name))
       if (regionPoiClusterFilter && !clusterNames.includes(regionPoiClusterFilter)) return false
@@ -93,6 +93,7 @@ export function useRegionPoiDirectoryOptions({
         normalizeForMatch(poi.rl_place_id).includes(q)
       )
     })
+    return filtered
   }, [regionPois, regionPoiSearch, regionPoiClusterFilter, regionPoiTypeFilter])
 
   const regionPoiById = useMemo(() => buildRegionPoiMap(regionPois), [regionPois])

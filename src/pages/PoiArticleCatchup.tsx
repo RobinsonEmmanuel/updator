@@ -944,6 +944,7 @@ export function PoiArticleCatchup() {
                   )
                 }
                 void backlog.refetch()
+                void regionPois.refetch()
                 pushLog(
                   "success",
                   `POI créé et lié (${decodeHtmlEntities(linkPanelRow.title)}) -> _id: ${result.createdRlPlaceId || "N/A"} · place_instance_id: ${result.createdRlPlaceInstanceId || "N/A"}`

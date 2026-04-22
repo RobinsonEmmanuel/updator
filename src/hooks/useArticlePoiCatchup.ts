@@ -1,7 +1,7 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
 import { ingestionApiUrl, ingestionFetch } from "@/lib/api"
 import { mapBacklogResponse } from "@/features/article-poi-catchup/articlePoiMapper"
-import type { CreateRlBody, CreateRlResponse, ManualLinkResponse } from "@redactor-guide/article-poi-contract"
+import type { CreateRlBody, CreateRlResponse, ManualLinkResponse } from "@/types/articlePoiContract"
 
 export type PoiAssociationStatus = "pending" | "needs_review" | "linked" | "created" | "ignored"
 export type PoiConfidence = "high" | "medium" | "low"

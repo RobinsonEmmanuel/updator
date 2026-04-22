@@ -1,39 +1,26 @@
-import { useEffect, useMemo, useRef, useState, type MouseEvent } from "react"
-import { Link } from "react-router-dom"
-import { RefreshCw, Settings, Search, Link2, Sparkles, Loader2, PanelRight, X, Info, BookOpen, Trash2, ChevronDown, ArrowLeft, ChevronsDown, ChevronsUp } from "lucide-react"
+import { useEffect, useMemo, useRef, type MouseEvent } from "react"
+import { RefreshCw, Search, Link2, Sparkles, X, Info, BookOpen, Trash2, ChevronDown } from "lucide-react"
 import { SiteCardsGrid } from "@/components/shared"
 import { useSiteContext } from "@/lib/SiteContext"
 import {
-  useArticlePoiBacklog,
-  useArticlePoiManualLink,
-  useArticlePoiMarkCandidate,
-  useArticlePoiRecompute,
-  useArticlePoiRecomputeArticle,
-  useArticlePoiRecomputeCandidate,
-  useArticlePoiRegionPois,
-  useArticlePoiUnlink,
-  useSiteCategories,
-  type PoiAssociationStatus,
   type ArticlePoiBacklogRow,
 } from "@/hooks"
 import { cn } from "@/lib/utils"
-
-const STATUS_LABELS: Record<PoiAssociationStatus, string> = {
-  pending: "A traiter",
-  needs_review: "A revoir",
-  linked: "Associé",
-  created: "Créé RL",
-  ignored: "Ignoré",
-}
-
-type ActionLogLevel = "info" | "success" | "error"
-
-interface ActionLogEntry {
-  id: string
-  at: string
-  level: ActionLogLevel
-  message: string
-}
+import {
+  decodeHtmlEntities,
+  normalizeForMatch,
+  buildRegionPoiMap,
+} from "@/features/article-poi-catchup/domain"
+import { NoSitesMessage } from "@/features/article-poi-catchup/components/NoSitesMessage"
+import { ActionLogWidget } from "@/features/article-poi-catchup/components/ActionLogWidget"
+import { BacklogTable } from "@/features/article-poi-catchup/components/BacklogTable"
+import { usePoiArticleCatchupController } from "@/features/article-poi-catchup/usePoiArticleCatchupController"
+import { usePoiCatchupDetailController } from "@/features/article-poi-catchup/usePoiCatchupDetailController"
+import { ArticleDetailHeader } from "@/features/article-poi-catchup/components/ArticleDetailHeader"
+import { ArticleSectionsPanel } from "@/features/article-poi-catchup/components/ArticleSectionsPanel"
+import { CandidateListPanel } from "@/features/article-poi-catchup/components/CandidateListPanel"
+import { AnnuaireModal } from "@/features/article-poi-catchup/components/AnnuaireModal"
+import { ScanModal } from "@/features/article-poi-catchup/components/ScanModal"
 
 interface ArticleSectionView {
   id: string
@@ -52,41 +39,6 @@ interface CandidateSectionMeta {
   section_title?: string
   occurrences?: Array<{ section_title?: string }>
   suggestions?: unknown[]
-}
-
-interface ManualCandidateDraft {
-  name: string
-  sectionTitle: string
-  sectionId: string
-  anchorX: number
-  anchorY: number
-}
-
-function normalizeForMatch(input: string): string {
-  return decodeHtmlEntities(input || "")
-    .normalize("NFD")
-    .replace(/[\u0300-\u036f]/g, "")
-    .toLowerCase()
-    .replace(/[^a-z0-9\s-]/g, " ")
-    .replace(/\s+/g, " ")
-    .trim()
-}
-
-function decodeHtmlEntities(str: string): string {
-  return str
-    .replace(/&rsquo;|&#8217;|&#x2019;/g, "'")
-    .replace(/&#8216;|&#x2018;/g, "'")
-    .replace(/&#8220;|&#8221;|&quot;/g, '"')
-    .replace(/&amp;/g, "&")
-    .replace(/&lt;/g, "<")
-    .replace(/&gt;/g, ">")
-    .replace(/&#8211;/g, "–")
-    .replace(/&#8212;/g, "—")
-}
-
-function formatLogTime(iso: string): string {
-  const d = new Date(iso)
-  return Number.isNaN(d.getTime()) ? "—" : d.toLocaleTimeString("fr-FR")
 }
 
 function parseSectionsFromHtml(html: string, candidates: CandidateSectionMeta[]): ArticleSectionView[] {
@@ -439,98 +391,88 @@ function directionalWordOverlap(a: string, b: string): number {
   return overlap / Math.max(1, Math.min(aWords.size, bWords.size))
 }
 
-function NoSitesMessage() {
-  return (
-    <div className="p-8 max-w-2xl mx-auto">
-      <div className="bg-white/60 backdrop-blur-sm rounded-xl p-8 text-center shadow-sm">
-        <div className="w-16 h-16 bg-orange-100 rounded-full flex items-center justify-center mx-auto mb-4">
-          <Settings className="h-8 w-8 text-orange-500" />
-        </div>
-        <h2 className="text-lg font-medium text-stone-800 mb-2">Aucun site WordPress configuré</h2>
-        <p className="text-stone-500 mb-6">Configure un site WordPress pour lancer le rattrapage POI/article.</p>
-        <Link
-          to="/settings"
-          className="inline-flex items-center gap-2 px-4 py-2 bg-orange-500 text-white rounded-lg text-sm font-medium hover:bg-orange-600 transition-colors"
-        >
-          Configurer un site
-        </Link>
-      </div>
-    </div>
-  )
-}
-
 export function PoiArticleCatchup() {
   const { selectedSite, hasNoSites, isAllSitesSelected, sites, setSelectedSiteId } = useSiteContext()
   const siteId = selectedSite?._id
-  const [status, setStatus] = useState<PoiAssociationStatus | undefined>("needs_review")
-  const [category, setCategory] = useState<string>("")
-  const [search, setSearch] = useState("")
-  const [linkState, setLinkState] = useState<"all" | "linked" | "unlinked">("all")
-  const [linkPanelRow, setLinkPanelRow] = useState<ArticlePoiBacklogRow | null>(null)
-  const [regionPoiSearch, setRegionPoiSearch] = useState("")
-  const [regionPoiClusterFilter, setRegionPoiClusterFilter] = useState("")
-  const [regionPoiTypeFilter, setRegionPoiTypeFilter] = useState("")
-  const [selectedRegionPoi, setSelectedRegionPoi] = useState<{
-    rl_place_id: string
-    name: string
-    place_type?: string
-    place_type_label_fr?: string
-    cluster_name?: string
-    confidenceScore?: number
-  } | null>(null)
-  const [imagePreviewSrc, setImagePreviewSrc] = useState<string | null>(null)
-  const [selectedCandidateId, setSelectedCandidateId] = useState<string | null>(null)
-  const [focusedCandidateId, setFocusedCandidateId] = useState<string | null>(null)
-  const [openSectionIds, setOpenSectionIds] = useState<string[]>([])
-  const [annuaireModalCandidateId, setAnnuaireModalCandidateId] = useState<string | null>(null)
-  const [unlinkConfirmCandidateId, setUnlinkConfirmCandidateId] = useState<string | null>(null)
-  const [expandedCandidateInfo, setExpandedCandidateInfo] = useState<Record<string, boolean>>({})
-  const [scanModalOpen, setScanModalOpen] = useState(false)
-  const [actionLogs, setActionLogs] = useState<ActionLogEntry[]>([])
-  const [manualCandidateDraft, setManualCandidateDraft] = useState<ManualCandidateDraft | null>(null)
-
-  const backlog = useArticlePoiBacklog({
-    siteId,
-    status,
-    category: category || undefined,
-    page: 1,
-    limit: 100,
-  })
-  const recompute = useArticlePoiRecompute(siteId)
-  const recomputeArticle = useArticlePoiRecomputeArticle(siteId)
-  const recomputeCandidate = useArticlePoiRecomputeCandidate(siteId)
-  const markCandidate = useArticlePoiMarkCandidate(siteId)
-  const manualLink = useArticlePoiManualLink(siteId)
-  const unlinkPoi = useArticlePoiUnlink(siteId)
-  const siteCategories = useSiteCategories(siteId)
-  const regionPois = useArticlePoiRegionPois({ siteId, limit: 1000 })
-
-  const filteredRows = useMemo(() => {
-    const rows = backlog.data?.data || []
-    const q = search.trim().toLowerCase()
-    return rows.filter((row) => {
-      const isLinked = !!(row.hasLinkedPoi ?? row.association?.rl_place_id)
-      if (linkState === "linked" && !isLinked) return false
-      if (linkState === "unlinked" && isLinked) return false
-      if (!q) return true
-      return (
-        decodeHtmlEntities(row.title).toLowerCase().includes(q) ||
-        decodeHtmlEntities(row.candidateName).toLowerCase().includes(q) ||
-        (row.rlSuggestions || row.suggestions).some((s) => decodeHtmlEntities(s.name).toLowerCase().includes(q)) ||
-        (row.detectedCandidates || row.candidateGroups).some((g) => decodeHtmlEntities(g.name).toLowerCase().includes(q))
-      )
-    })
-  }, [backlog.data?.data, linkState, search])
+  const controller = usePoiArticleCatchupController({ siteId })
+  const {
+    category,
+    setCategory,
+    search,
+    setSearch,
+    scanValidationFilter,
+    setScanValidationFilter,
+    selectedRlPoiFilter,
+    setSelectedRlPoiFilter,
+    scanModalOpen,
+    setScanModalOpen,
+    actionLogs,
+    isLogWidgetOpen,
+    setIsLogWidgetOpen,
+    filteredRows,
+    scanValidationCounts,
+    availableLinkedPois,
+    reportingStats,
+    mutationPending,
+    hasBlockingActionLogs,
+    pushLog,
+    backlog,
+    recompute,
+    recomputeArticle,
+    setScanValidation,
+    recomputeCandidate,
+    markCandidate,
+    manualLink,
+    unlinkPoi,
+    removeCandidate,
+    siteCategories,
+    regionPois,
+  } = controller
+  const detail = usePoiCatchupDetailController()
+  const {
+    linkPanelRow,
+    setLinkPanelRow,
+    regionPoiSearch,
+    setRegionPoiSearch,
+    regionPoiClusterFilter,
+    setRegionPoiClusterFilter,
+    regionPoiTypeFilter,
+    setRegionPoiTypeFilter,
+    selectedRegionPoi,
+    setSelectedRegionPoi,
+    imagePreviewSrc,
+    setImagePreviewSrc,
+    selectedCandidateId,
+    setSelectedCandidateId,
+    focusedCandidateId,
+    setFocusedCandidateId,
+    openSectionIds,
+    setOpenSectionIds,
+    annuaireModalCandidateId,
+    setAnnuaireModalCandidateId,
+    unlinkConfirmCandidateId,
+    setUnlinkConfirmCandidateId,
+    removeConfirmCandidateId,
+    setRemoveConfirmCandidateId,
+    expandedCandidateInfo,
+    setExpandedCandidateInfo,
+    manualCandidateDraft,
+    setManualCandidateDraft,
+    recomputeCandidateInFlightId,
+    setRecomputeCandidateInFlightId,
+    openLinkPanel,
+    closeLinkPanel,
+    applyLinkedCandidateInPanel,
+    applyUnlinkedCandidateInPanel,
+    applyRemovedCandidateInPanel,
+    applyRecomputedCandidateInPanel,
+  } = detail
 
   const panelCandidateGroups = useMemo(
-    () => (linkPanelRow?.detectedCandidates || linkPanelRow?.candidateGroups || []),
+    () => (linkPanelRow?.detectedCandidates || []),
     [linkPanelRow]
   )
 
-  const selectedCandidate = useMemo(
-    () => panelCandidateGroups.find((g) => g.candidate_id === selectedCandidateId) || panelCandidateGroups[0],
-    [panelCandidateGroups, selectedCandidateId]
-  )
   const annuaireModalCandidate = useMemo(
     () => panelCandidateGroups.find((g) => g.candidate_id === annuaireModalCandidateId) || null,
     [panelCandidateGroups, annuaireModalCandidateId]
@@ -582,9 +524,7 @@ export function PoiArticleCatchup() {
   const showRegionPoiSearchSpinner = regionPois.isLoading || regionPois.isFetching
   const showRegionPoiLoadingPlaceholder =
     (regionPois.isLoading || regionPois.isFetching) && filteredRegionPois.length === 0
-  const regionPoiById = useMemo(() => {
-    return new Map((regionPois.data || []).map((poi) => [poi.rl_place_id, poi]))
-  }, [regionPois.data])
+  const regionPoiById = useMemo(() => buildRegionPoiMap(regionPois.data || []), [regionPois.data])
   const placeTypeLabelByType = useMemo(() => {
     const map = new Map<string, string>()
     ;(regionPois.data || []).forEach((poi) => {
@@ -595,6 +535,8 @@ export function PoiArticleCatchup() {
     return map
   }, [regionPois.data])
   const unknownMetaLogRef = useRef<Set<string>>(new Set())
+  const lastOpenedArticleIdRef = useRef<string | null>(null)
+  const openSectionTitleKeysRef = useRef<string[]>([])
   const logUnknownMeta = (
     kind: "linked" | "suggestion",
     candidateId: string,
@@ -672,7 +614,7 @@ export function PoiArticleCatchup() {
     if (updated) {
       setLinkPanelRow(updated)
       if (selectedCandidateId) {
-        const groups = updated.detectedCandidates || updated.candidateGroups || []
+        const groups = updated.detectedCandidates || []
         const stillExists = groups.some((g) => g.candidate_id === selectedCandidateId)
         if (!stillExists) setSelectedCandidateId(groups[0]?.candidate_id || null)
       }
@@ -686,12 +628,37 @@ export function PoiArticleCatchup() {
       setOpenSectionIds([])
       setFocusedCandidateId(null)
       setManualCandidateDraft(null)
+      lastOpenedArticleIdRef.current = null
       return
     }
-    setOpenSectionIds([])
-    setFocusedCandidateId(null)
-    setManualCandidateDraft(null)
-  }, [linkPanelRow?.articleId, articleSections])
+
+    // Only reset panel view when switching to another article.
+    if (lastOpenedArticleIdRef.current !== linkPanelRow.articleId) {
+      setOpenSectionIds([])
+      setFocusedCandidateId(null)
+      setManualCandidateDraft(null)
+      lastOpenedArticleIdRef.current = linkPanelRow.articleId
+    }
+  }, [linkPanelRow?.articleId])
+
+  useEffect(() => {
+    openSectionTitleKeysRef.current = articleSections
+      .filter((section) => openSectionIds.includes(section.id))
+      .map((section) => normalizeForMatch(section.title) || section.id)
+  }, [articleSections, openSectionIds])
+
+  useEffect(() => {
+    if (!linkPanelRow) return
+    if (openSectionTitleKeysRef.current.length === 0) return
+    const desired = new Set(openSectionTitleKeysRef.current)
+    const remappedIds = articleSections
+      .filter((section) => desired.has(normalizeForMatch(section.title) || section.id))
+      .map((section) => section.id)
+    if (remappedIds.length === 0) return
+    const current = openSectionIds.join("|")
+    const next = remappedIds.join("|")
+    if (current !== next) setOpenSectionIds(remappedIds)
+  }, [articleSections, linkPanelRow?.articleId])
 
   useEffect(() => {
     if (!focusedCandidateId) return
@@ -720,162 +687,6 @@ export function PoiArticleCatchup() {
     )
   }
 
-  const mutationPending =
-    recompute.isPending ||
-    manualLink.isPending ||
-    unlinkPoi.isPending ||
-    recomputeArticle.isPending ||
-    recomputeCandidate.isPending ||
-    markCandidate.isPending
-
-  const pushLog = (level: ActionLogLevel, message: string) => {
-    const entry: ActionLogEntry = {
-      id: `${Date.now()}-${Math.random()}`,
-      at: new Date().toISOString(),
-      level,
-      message,
-    }
-    setActionLogs((prev) => [entry, ...prev].slice(0, 30))
-  }
-
-  const openLinkPanel = (row: ArticlePoiBacklogRow) => {
-    setLinkPanelRow(row)
-    const groups = row.detectedCandidates || row.candidateGroups || []
-    const initialCandidateId =
-      row.association?.candidate_id ||
-      groups[0]?.candidate_id ||
-      null
-    setSelectedCandidateId(initialCandidateId)
-    setRegionPoiSearch("")
-    setRegionPoiClusterFilter("")
-    setRegionPoiTypeFilter("")
-    setSelectedRegionPoi(null)
-    setFocusedCandidateId(null)
-    setAnnuaireModalCandidateId(null)
-    setExpandedCandidateInfo({})
-    setManualCandidateDraft(null)
-  }
-
-  const closeLinkPanel = () => {
-    setLinkPanelRow(null)
-    setSelectedRegionPoi(null)
-    setAnnuaireModalCandidateId(null)
-    setUnlinkConfirmCandidateId(null)
-    setFocusedCandidateId(null)
-    setOpenSectionIds([])
-    setImagePreviewSrc(null)
-    setManualCandidateDraft(null)
-  }
-
-  const applyLinkedCandidateInPanel = (params: {
-    candidateId: string
-    rlPlaceId: string
-    rlPlaceName?: string
-    placeType?: string
-    placeTypeLabelFr?: string
-    clusterId?: string
-    clusterName?: string
-  }) => {
-    setLinkPanelRow((prev) => {
-      if (!prev) return prev
-      const current = prev.detectedCandidates || prev.candidateGroups || []
-      const nextGroups = current.map((group) =>
-        group.candidate_id === params.candidateId
-          ? {
-              ...group,
-              rl_place_id: params.rlPlaceId,
-              rl_place_name: params.rlPlaceName || group.rl_place_name || group.name,
-              rl_place_type: params.placeType || group.rl_place_type,
-              rl_place_type_label_fr: params.placeTypeLabelFr || group.rl_place_type_label_fr,
-              rl_cluster_id: params.clusterId || group.rl_cluster_id,
-              rl_cluster_name: params.clusterName || group.rl_cluster_name,
-              link_status: "linked" as PoiAssociationStatus,
-              validated: true,
-              suggestions: [],
-            }
-          : group
-      )
-      const linkedCount = nextGroups.filter((group) => !!group.rl_place_id).length
-      return {
-        ...prev,
-        status: linkedCount > 0 ? "linked" : prev.status,
-        detectedCandidates: nextGroups,
-        candidateGroups: nextGroups,
-        linkedPoiCount: linkedCount,
-        associatedPoiCount: linkedCount,
-        hasLinkedPoi: linkedCount > 0,
-        association: {
-          status: "linked",
-          rl_place_id: params.rlPlaceId,
-          rl_place_name: params.rlPlaceName,
-          candidate_id: params.candidateId,
-          validated: true,
-          score: 1,
-          confidence: "high",
-          updated_at: new Date().toISOString(),
-        },
-      }
-    })
-  }
-
-  const applyUnlinkedCandidateInPanel = (candidateId: string) => {
-    setLinkPanelRow((prev) => {
-      if (!prev) return prev
-      const current = prev.detectedCandidates || prev.candidateGroups || []
-      const nextGroups = current.map((group) =>
-        group.candidate_id === candidateId
-          ? {
-              ...group,
-              rl_place_id: undefined,
-              rl_place_name: undefined,
-              rl_place_type: undefined,
-              rl_place_type_label_fr: undefined,
-              rl_cluster_id: undefined,
-              rl_cluster_name: undefined,
-              link_status: "needs_review" as PoiAssociationStatus,
-              validated: false,
-            }
-          : group
-      )
-      const linkedCount = nextGroups.filter((group) => !!group.rl_place_id).length
-      return {
-        ...prev,
-        status: linkedCount > 0 ? "linked" : "needs_review",
-        detectedCandidates: nextGroups,
-        candidateGroups: nextGroups,
-        linkedPoiCount: linkedCount,
-        associatedPoiCount: linkedCount,
-        hasLinkedPoi: linkedCount > 0,
-        association: linkedCount > 0 ? prev.association : null,
-      }
-    })
-  }
-
-  const applyRecomputedCandidateInPanel = (candidateId: string, nextCandidate: ArticlePoiBacklogRow["candidateGroups"][number]) => {
-    setLinkPanelRow((prev) => {
-      if (!prev) return prev
-      const current = prev.detectedCandidates || prev.candidateGroups || []
-      const nextGroups = current.map((group, index) =>
-        group.candidate_id === candidateId
-          ? {
-              ...nextCandidate,
-              is_primary: index === 0,
-              suggestions: Array.isArray(nextCandidate.suggestions) ? nextCandidate.suggestions : [],
-            }
-          : group
-      )
-      const linkedCount = nextGroups.filter((group) => !!group.rl_place_id).length
-      return {
-        ...prev,
-        detectedCandidates: nextGroups,
-        candidateGroups: nextGroups,
-        linkedPoiCount: linkedCount,
-        associatedPoiCount: linkedCount,
-        hasLinkedPoi: linkedCount > 0,
-      }
-    })
-  }
-
   const handleScanSite = () => {
     setScanModalOpen(true)
     pushLog("info", `Scan site lancé (${selectedSite.name})`)
@@ -902,6 +713,17 @@ export function PoiArticleCatchup() {
       { articleId: row.articleId, force: true },
       {
         onSuccess: (res) => {
+          if (res.refreshed) {
+            setLinkPanelRow((prev) =>
+              prev && prev.articleId === row.articleId
+                ? {
+                    ...prev,
+                    poiScanValidated: false,
+                    poiScanValidatedAt: null,
+                  }
+                : prev
+            )
+          }
           pushLog(
             "success",
             `Relance article terminée (${displayTitle}): ${res.result}, refresh=${res.refreshed ? "ok" : "non"}, ${res.rlPlacesLoaded} POI RL`
@@ -909,6 +731,33 @@ export function PoiArticleCatchup() {
         },
         onError: (error) => {
           pushLog("error", `Relance article en erreur (${displayTitle}): ${error.message}`)
+        },
+      }
+    )
+  }
+
+  const triggerSetArticleScanValidation = (row: ArticlePoiBacklogRow, validated: boolean) => {
+    const displayTitle = decodeHtmlEntities(row.title)
+    setScanValidation.mutate(
+      { articleId: row.articleId, validated },
+      {
+        onSuccess: (res) => {
+          setLinkPanelRow((prev) =>
+            prev && prev.articleId === row.articleId
+              ? {
+                  ...prev,
+                  poiScanValidated: res.poiScanValidated,
+                  poiScanValidatedAt: res.poiScanValidatedAt,
+                }
+              : prev
+          )
+          pushLog(
+            "success",
+            `${validated ? "Validation scan activée" : "Validation scan retirée"} (${displayTitle})`
+          )
+        },
+        onError: (error) => {
+          pushLog("error", `Validation scan en erreur (${displayTitle}): ${error.message}`)
         },
       }
     )
@@ -924,8 +773,9 @@ export function PoiArticleCatchup() {
     const displayCandidate = decodeHtmlEntities(candidateName)
     const modeLabel = options?.suggestionId
       ? `ciblé suggestion (${decodeHtmlEntities(options.suggestionName || options.suggestionId)})`
-      : "candidat"
+      : "candidat uniquement"
     pushLog("info", `Relance ${modeLabel} lancée: ${displayTitle} · ${displayCandidate}`)
+    setRecomputeCandidateInFlightId(candidateId)
     recomputeCandidate.mutate(
       {
         articleId: row.articleId,
@@ -944,6 +794,9 @@ export function PoiArticleCatchup() {
         },
         onError: (error) => {
           pushLog("error", `Relance ${modeLabel} en erreur (${displayCandidate}): ${error.message}`)
+        },
+        onSettled: () => {
+          setRecomputeCandidateInFlightId(null)
         },
       }
     )
@@ -1074,80 +927,59 @@ export function PoiArticleCatchup() {
         ) : null}
       </div>
 
-      {!isDetailView && recompute.data?.summary && (
-        <div className="rounded-xl border border-teal-200 bg-teal-50 p-3 text-sm text-teal-800">
-          Scan terminé · {recompute.data.summary.refreshed} contenus refresh WP · {recompute.data.summary.updated} matching recalculés ·{" "}
-          {recompute.data.summary.needsReview} à revue
-        </div>
-      )}
-
-      {!isDetailView && <div className="grid grid-cols-1 md:grid-cols-4 gap-3">
+      {!isDetailView && <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
         <div className="rounded-lg border border-stone-200 bg-white p-3">
-          <div className="text-xs text-stone-500">Articles backlog</div>
-          <div className="text-lg font-semibold text-stone-800">{backlog.data?.total ?? 0}</div>
+          <div className="text-xs text-stone-500">Articles (catégorie en cours)</div>
+          <div className="text-lg font-semibold text-stone-800">{reportingStats.articlesCount}</div>
         </div>
         <div className="rounded-lg border border-stone-200 bg-white p-3">
-          <div className="text-xs text-stone-500">Avec POI lié</div>
-          <div className="text-lg font-semibold text-stone-800">{backlog.data?.summary?.withLinkedPoi ?? 0}</div>
+          <div className="text-xs text-stone-500">Articles rapprochés à l'annuaire</div>
+          <div className="text-lg font-semibold text-stone-800">{reportingStats.articlesMatchedToDirectory}</div>
         </div>
         <div className="rounded-lg border border-stone-200 bg-white p-3">
-          <div className="text-xs text-stone-500">Sans POI lié</div>
-          <div className="text-lg font-semibold text-stone-800">{backlog.data?.summary?.withoutLinkedPoi ?? 0}</div>
-        </div>
-        <div className="rounded-lg border border-stone-200 bg-white p-3">
-          <div className="text-xs text-stone-500">Candidats détectés</div>
-          <div className="text-lg font-semibold text-stone-800">{backlog.data?.summary?.detectedCandidates ?? 0}</div>
+          <div className="text-xs text-stone-500">POI RL uniques associés</div>
+          <div className="text-lg font-semibold text-emerald-700">{reportingStats.uniqueLinkedRlPoiCount}</div>
         </div>
       </div>}
 
       {!isDetailView && <div className="flex flex-wrap gap-2">
         <button
           type="button"
-          onClick={() => setStatus(undefined)}
-          className={cn("px-3 py-1.5 text-sm rounded-lg border", !status ? "bg-orange-100 border-orange-200 text-orange-800" : "bg-white border-stone-200 text-stone-600")}
+          onClick={() => setScanValidationFilter("all")}
+          className={cn(
+            "px-3 py-1.5 text-sm rounded-lg border",
+            scanValidationFilter === "all" ? "bg-emerald-100 border-emerald-200 text-emerald-800" : "bg-white border-stone-200 text-stone-600"
+          )}
         >
           Tous ({backlog.data?.total ?? 0})
         </button>
-        {(Object.keys(STATUS_LABELS) as PoiAssociationStatus[]).map((key) => (
-          <button
-            key={key}
-            type="button"
-            onClick={() => setStatus(key)}
-            className={cn(
-              "px-3 py-1.5 text-sm rounded-lg border",
-              status === key ? "bg-orange-100 border-orange-200 text-orange-800" : "bg-white border-stone-200 text-stone-600"
-            )}
-          >
-            {STATUS_LABELS[key]} ({backlog.data?.summary?.[key] || 0})
-          </button>
-        ))}
-      </div>}
-
-      {!isDetailView && <div className="flex flex-wrap gap-2">
         <button
           type="button"
-          onClick={() => setLinkState("all")}
-          className={cn("px-3 py-1.5 text-sm rounded-lg border", linkState === "all" ? "bg-orange-100 border-orange-200 text-orange-800" : "bg-white border-stone-200 text-stone-600")}
+          onClick={() => setScanValidationFilter("validated")}
+          className={cn(
+            "px-3 py-1.5 text-sm rounded-lg border",
+            scanValidationFilter === "validated"
+              ? "bg-emerald-100 border-emerald-200 text-emerald-800"
+              : "bg-white border-stone-200 text-stone-600"
+          )}
         >
-          Tous
+          Articles validés scan POI ({scanValidationCounts.validated})
         </button>
         <button
           type="button"
-          onClick={() => setLinkState("linked")}
-          className={cn("px-3 py-1.5 text-sm rounded-lg border", linkState === "linked" ? "bg-orange-100 border-orange-200 text-orange-800" : "bg-white border-stone-200 text-stone-600")}
+          onClick={() => setScanValidationFilter("to_validate")}
+          className={cn(
+            "px-3 py-1.5 text-sm rounded-lg border",
+            scanValidationFilter === "to_validate"
+              ? "bg-amber-100 border-amber-200 text-amber-800"
+              : "bg-white border-stone-200 text-stone-600"
+          )}
         >
-          Avec POI lié
-        </button>
-        <button
-          type="button"
-          onClick={() => setLinkState("unlinked")}
-          className={cn("px-3 py-1.5 text-sm rounded-lg border", linkState === "unlinked" ? "bg-orange-100 border-orange-200 text-orange-800" : "bg-white border-stone-200 text-stone-600")}
-        >
-          Sans POI lié
+          À valider ({scanValidationCounts.toValidate})
         </button>
       </div>}
 
-      {!isDetailView && <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+      {!isDetailView && <div className="grid grid-cols-1 md:grid-cols-4 gap-3">
         <div className="md:col-span-2">
           <div className="relative">
             <Search className="h-4 w-4 absolute left-3 top-1/2 -translate-y-1/2 text-stone-400" />
@@ -1171,31 +1003,19 @@ export function PoiArticleCatchup() {
             </option>
           ))}
         </select>
+        <select
+          value={selectedRlPoiFilter}
+          onChange={(e) => setSelectedRlPoiFilter(e.target.value)}
+          className="w-full px-3 py-2 rounded-lg border border-stone-200 bg-white text-sm"
+        >
+          <option value="">Tous les POI RL liés</option>
+          {availableLinkedPois.map((poi) => (
+            <option key={poi.id} value={poi.id}>
+              {poi.name}
+            </option>
+          ))}
+        </select>
       </div>}
-
-      {!isDetailView && actionLogs.length > 0 && (
-        <div className="rounded-xl border border-stone-200 bg-white/80 p-3">
-          <h3 className="text-sm font-medium text-stone-700 mb-2">Journal d’actions</h3>
-          <div className="space-y-1 max-h-44 overflow-auto">
-            {actionLogs.map((log) => (
-              <div key={log.id} className="text-xs text-stone-600 flex items-center gap-2">
-                <span className="text-stone-400 min-w-[54px]">{formatLogTime(log.at)}</span>
-                <span
-                  className={cn(
-                    "inline-flex rounded px-1.5 py-0.5",
-                    log.level === "success" && "bg-green-100 text-green-700",
-                    log.level === "error" && "bg-red-100 text-red-700",
-                    log.level === "info" && "bg-stone-100 text-stone-700"
-                  )}
-                >
-                  {log.level}
-                </span>
-                <span>{log.message}</span>
-              </div>
-            ))}
-          </div>
-        </div>
-      )}
 
       {!isDetailView && backlog.error && (
         <div className="rounded-xl border border-red-200 bg-red-50 p-3 text-sm text-red-700">
@@ -1206,221 +1026,47 @@ export function PoiArticleCatchup() {
       {!isDetailView && backlog.isLoading ? (
         <div className="text-sm text-stone-500">Chargement du backlog…</div>
       ) : !linkPanelRow ? (
-        <div className="bg-white/80 rounded-xl border border-stone-200 overflow-x-auto">
-          <table className="min-w-full text-sm">
-            <thead className="bg-stone-50 text-stone-600">
-              <tr>
-                <th className="text-left px-4 py-3 font-medium">Article</th>
-                <th className="text-left px-4 py-3 font-medium">POI associé(s)</th>
-                <th className="text-left px-4 py-3 font-medium">POI RL proposés</th>
-                <th className="text-left px-4 py-3 font-medium">Actions</th>
-              </tr>
-            </thead>
-            <tbody>
-              {filteredRows.map((row) => {
-                const candidates = row.detectedCandidates || row.candidateGroups || []
-                const linkedCandidates = candidates.filter((candidate) => !!candidate.rl_place_id)
-                const linkedIds = new Set(linkedCandidates.map((candidate) => candidate.rl_place_id).filter(Boolean))
-                const allSuggestions = Array.from(
-                  new Map(
-                    candidates
-                      .filter((group) => !group.rl_place_id)
-                      .flatMap((group) => (group.suggestions || []).slice(0, 2))
-                      .sort((a, b) => b.score - a.score)
-                      .map((s) => [s.rl_place_id, s])
-                  ).values()
-                )
-                const linkedPills = linkedCandidates
-                  .filter((candidate) => !!candidate.rl_place_id)
-                  .map((candidate) => ({
-                    rl_place_id: candidate.rl_place_id as string,
-                    name: candidate.rl_place_name || candidate.name,
-                    score: 1,
-                  }))
-                const previewSuggestions = [...linkedPills, ...allSuggestions.filter((s) => !linkedIds.has(s.rl_place_id))].slice(0, 4)
-                const displayTitle = decodeHtmlEntities(row.title)
-                const candidateCount = row.detectedCandidatesCount ?? candidates.length ?? (row.candidateName ? 1 : 0)
-                const unmatchedCount = row.unmatchedCandidatesCount ?? candidates.filter((g) => !g.rl_place_id && (g.suggestions || []).length === 0).length
-                return (
-                  <tr key={row.articleId} className="border-t border-stone-100 align-top">
-                    <td className="px-4 py-3 min-w-[340px]">
-                      <div className="font-medium text-stone-800">{displayTitle}</div>
-                      <div className="text-xs text-stone-500 mt-1">{row.categories.join(" · ") || "Sans catégorie"}</div>
-                      <div className="text-xs text-stone-500 mt-1">
-                        Candidats détectés: {candidateCount} · Candidats sans suggestion RL: {unmatchedCount}
-                      </div>
-                    </td>
-                    <td className="px-4 py-3 min-w-[220px]">
-                      <div className="font-medium text-stone-800">{row.linkedPoiCount ?? row.associatedPoiCount}</div>
-                      <div className="text-xs text-stone-500 mt-1">
-                        {linkedCandidates.length > 0
-                          ? linkedCandidates
-                              .map((candidate) => decodeHtmlEntities(candidate.rl_place_name || candidate.name))
-                              .filter(Boolean)
-                              .join(" · ")
-                          : row.association?.rl_place_name || row.association?.rl_place_id || "Aucun lien RL"}
-                      </div>
-                    </td>
-                    <td className="px-4 py-3 min-w-[360px]">
-                      {previewSuggestions.length > 0 ? (
-                        <div className="flex flex-wrap gap-1.5">
-                          {previewSuggestions.map((s) => {
-                            const isOfficiallyLinked =
-                              linkedIds.has(s.rl_place_id) ||
-                              (!!row.association?.rl_place_id &&
-                                row.association.rl_place_id === s.rl_place_id &&
-                                (row.status === "linked" || row.status === "created" || row.association?.validated === true))
-                            return (
-                              <span
-                                key={s.rl_place_id}
-                                className={cn(
-                                  "inline-flex items-center gap-1 rounded-full px-2 py-1 text-xs border",
-                                  isOfficiallyLinked
-                                    ? "bg-orange-100 border-orange-200 text-orange-800"
-                                    : "bg-stone-100 border-stone-200 text-stone-700"
-                                )}
-                                title={`${decodeHtmlEntities(s.name)} (${Math.round(s.score * 100)}%)`}
-                              >
-                                <span className="max-w-[180px] truncate">{decodeHtmlEntities(s.name)}</span>
-                                <span className="font-medium">{Math.round(s.score * 100)}%</span>
-                              </span>
-                            )
-                          })}
-                        </div>
-                      ) : (
-                        <span className="text-xs text-stone-500">Aucun POI RL proposé</span>
-                      )}
-                    </td>
-                    <td className="px-4 py-3 min-w-[150px]">
-                      <div className="flex flex-wrap gap-2">
-                        <button
-                          type="button"
-                          onClick={() => {
-                            triggerRecomputeArticle(row)
-                          }}
-                          disabled={mutationPending}
-                          className="inline-flex items-center justify-center h-8 w-8 rounded-lg text-xs border border-stone-200 text-stone-700 bg-white hover:bg-stone-50 disabled:opacity-60"
-                          title="Relancer l'article"
-                        >
-                          <RefreshCw className="h-3.5 w-3.5" />
-                        </button>
-                        <button
-                          type="button"
-                          disabled={mutationPending}
-                          onClick={() => openLinkPanel(row)}
-                          className="inline-flex items-center justify-center h-8 w-8 rounded-lg text-xs border border-orange-200 text-orange-700 bg-orange-50 hover:bg-orange-100 disabled:opacity-60"
-                          title="Ouvrir espace liaison"
-                        >
-                          <PanelRight className="h-3.5 w-3.5" />
-                        </button>
-                      </div>
-                    </td>
-                  </tr>
-                )
-              })}
-            </tbody>
-          </table>
-          {filteredRows.length === 0 && (
-            <div className="p-8 text-center text-sm text-stone-500">Aucun article avec ces filtres.</div>
-          )}
-        </div>
+        <BacklogTable
+          rows={filteredRows}
+          mutationPending={mutationPending}
+          onRecomputeArticle={triggerRecomputeArticle}
+          onOpenDetail={openLinkPanel}
+        />
       ) : null}
 
       {linkPanelRow && (
         <div className="bg-transparent">
-          <div className="sticky top-0 z-10 px-0 py-2 bg-stone-50/85 backdrop-blur-sm flex items-start justify-between gap-3">
-              <div>
-                <h3 className="text-base font-semibold text-stone-800">Espace de liaison POI</h3>
-                <p className="text-xs text-stone-500 mt-1">{decodeHtmlEntities(linkPanelRow.title)}</p>
-                <div className="mt-2 flex flex-wrap gap-1.5">
-                  {(linkPanelRow.categories || []).length > 0 ? (
-                    linkPanelRow.categories.map((cat) => (
-                      <span key={cat} className="inline-flex items-center rounded-full border border-stone-200 bg-stone-50 px-2 py-0.5 text-[11px] text-stone-600">
-                        {decodeHtmlEntities(cat)}
-                      </span>
-                    ))
-                  ) : (
-                    <span className="inline-flex items-center rounded-full border border-stone-200 bg-stone-50 px-2 py-0.5 text-[11px] text-stone-500">
-                      Sans catégorie
-                    </span>
-                  )}
-                </div>
-              </div>
-              <div className="flex items-center gap-2">
-                <button
-                  type="button"
-                  onClick={() => triggerRecomputeArticle(linkPanelRow)}
-                  disabled={mutationPending}
-                  className="inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded border border-stone-200 text-stone-700 hover:bg-stone-50 disabled:opacity-60 text-xs"
-                  title="Relancer scan POI article (avec vérification WP)"
-                >
-                  <RefreshCw className={cn("h-3.5 w-3.5", recomputeArticle.isPending && "animate-spin")} />
-                  Relancer scan article
-                </button>
-                <button
-                  type="button"
-                  onClick={closeLinkPanel}
-                  className="inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded border border-orange-200 bg-orange-50 text-orange-700 hover:bg-orange-100 text-xs"
-                  aria-label="Retour à la liste"
-                  title="Retour à la liste"
-                >
-                  <ArrowLeft className="h-3.5 w-3.5" />
-                  Retour à la liste
-                </button>
-              </div>
-          </div>
+          <ArticleDetailHeader
+            row={linkPanelRow}
+            mutationPending={mutationPending}
+            recomputePending={recomputeArticle.isPending}
+            onRecomputeArticle={() => triggerRecomputeArticle(linkPanelRow)}
+            onToggleScanValidation={() => triggerSetArticleScanValidation(linkPanelRow, !linkPanelRow.poiScanValidated)}
+            onBack={closeLinkPanel}
+          />
 
           <div className="p-0">
               <div className="grid grid-cols-1 xl:grid-cols-12 gap-3">
                 <div className="xl:col-span-8 space-y-2">
-                  <div className="bg-white p-2.5 rounded-lg">
-                    <div className="text-xs text-stone-500">Article complet (sections H1/H2/H3, candidats surlignés cliquables)</div>
-                    <div className="text-sm font-medium text-stone-800 mt-1">{decodeHtmlEntities(linkPanelRow.title)}</div>
-                    {linkPanelRow.articleUrl ? (
-                      <a
-                        href={linkPanelRow.articleUrl}
-                        target="_blank"
-                        rel="noreferrer"
-                        className="text-xs text-orange-700 underline underline-offset-2"
-                      >
-                        Ouvrir l’article source
-                      </a>
-                    ) : null}
-                    {focusedCandidateId ? (
-                      <div className="mt-2 text-[11px] rounded border border-orange-200 bg-orange-50 text-orange-800 px-2 py-1 inline-flex items-center gap-2">
-                        Filtre candidat actif
-                        <button
-                          type="button"
-                          onClick={() => setFocusedCandidateId(null)}
-                          className="inline-flex items-center rounded border border-orange-200 bg-stone-50 px-1.5 py-0.5 hover:bg-orange-100"
-                        >
-                          Réinitialiser
-                        </button>
-                      </div>
-                    ) : null}
-                    <div className="mt-2 flex items-center gap-1.5">
-                      <button
-                        type="button"
-                        onClick={expandAllSections}
-                        disabled={articleSections.length === 0 || openSectionIds.length === articleSections.length}
-                        className="inline-flex items-center gap-1 rounded border border-stone-200 bg-stone-50 px-2 py-1 text-[11px] text-stone-700 hover:bg-stone-100 disabled:opacity-50"
-                        title="Tout déplier"
-                      >
-                        <ChevronsDown className="h-3.5 w-3.5" />
-                        Tout déplier
-                      </button>
-                      <button
-                        type="button"
-                        onClick={collapseAllSections}
-                        disabled={openSectionIds.length === 0}
-                        className="inline-flex items-center gap-1 rounded border border-stone-200 bg-stone-50 px-2 py-1 text-[11px] text-stone-700 hover:bg-stone-100 disabled:opacity-50"
-                        title="Tout replier"
-                      >
-                        <ChevronsUp className="h-3.5 w-3.5" />
-                        Tout replier
-                      </button>
-                    </div>
-                    <div className="mt-2 max-h-[75vh] overflow-y-auto rounded-md bg-white p-2 space-y-1.5">
+                  <ArticleSectionsPanel
+                    title={linkPanelRow.title}
+                    articleUrl={linkPanelRow.articleUrl}
+                    focusedCandidateId={focusedCandidateId}
+                    onResetFocus={() => setFocusedCandidateId(null)}
+                    onExpandAll={expandAllSections}
+                    onCollapseAll={collapseAllSections}
+                    canExpandAll={articleSections.length > 0 && openSectionIds.length !== articleSections.length}
+                    canCollapseAll={openSectionIds.length > 0}
+                    markPending={markCandidate.isPending}
+                    mutationPending={mutationPending}
+                    manualDraft={
+                      manualCandidateDraft
+                        ? { name: manualCandidateDraft.name, anchorX: manualCandidateDraft.anchorX, anchorY: manualCandidateDraft.anchorY }
+                        : null
+                    }
+                    onMarkDraft={markCandidateFromSelection}
+                    onCloseDraft={() => setManualCandidateDraft(null)}
+                  >
                       {articleSections.map((section) => {
                         const isOpen = openSectionIds.includes(section.id)
                         const sectionCandidates = panelCandidateGroups.filter((group) => section.candidateIds.includes(group.candidate_id))
@@ -1466,51 +1112,18 @@ export function PoiArticleCatchup() {
                           </div>
                         )
                       })}
-                      {manualCandidateDraft ? (
-                        <div
-                          className="fixed z-50 -translate-x-1/2 -translate-y-full rounded-md border border-orange-300 bg-white shadow-lg px-2 py-1.5 flex items-center gap-2"
-                          style={{
-                            left: Math.max(120, Math.min(window.innerWidth - 120, manualCandidateDraft.anchorX)),
-                            top: Math.max(80, manualCandidateDraft.anchorY - 10),
-                          }}
-                        >
-                          <span className="text-[11px] text-stone-600 max-w-[260px] truncate" title={manualCandidateDraft.name}>
-                            "{manualCandidateDraft.name}"
-                          </span>
-                          <button
-                            type="button"
-                            onClick={markCandidateFromSelection}
-                            disabled={mutationPending}
-                            className="inline-flex items-center gap-1 rounded border border-orange-300 bg-orange-50 px-2 py-1 text-[11px] text-orange-800 hover:bg-orange-100 disabled:opacity-60"
-                          >
-                            <Sparkles className={cn("h-3.5 w-3.5", markCandidate.isPending && "animate-spin")} />
-                            Marquer + scanner RL
-                          </button>
-                          <button
-                            type="button"
-                            onClick={() => setManualCandidateDraft(null)}
-                            className="inline-flex items-center rounded border border-stone-200 bg-white px-1.5 py-1 text-[11px] text-stone-600 hover:bg-stone-50"
-                            aria-label="Fermer l'action de marquage"
-                          >
-                            <X className="h-3.5 w-3.5" />
-                          </button>
-                        </div>
-                      ) : null}
-                    </div>
-                  </div>
+                  </ArticleSectionsPanel>
                 </div>
 
                 <div className="xl:col-span-4 space-y-2">
-                  <div className="space-y-2 max-h-[72vh] overflow-y-auto pr-0.5">
-                    {linkedPanelCandidateGroups.length > 0 ? (
-                      <div className="text-[11px] font-medium uppercase tracking-wide text-emerald-700 bg-emerald-50/70 border border-emerald-200 rounded px-2 py-1">
-                        POI déjà liés ({linkedPanelCandidateGroups.length})
-                      </div>
-                    ) : null}
+                  <CandidateListPanel
+                    linkedCount={linkedPanelCandidateGroups.length}
+                    unlinkedCount={unlinkedPanelCandidateGroups.length}
+                    hasVisibleCandidates={visiblePanelCandidateGroups.length > 0}
+                  >
                     {[...linkedPanelCandidateGroups, ...unlinkedPanelCandidateGroups].map((group, index) => {
                       const firstUnlinkedIndex = linkedPanelCandidateGroups.length
                       const showUnlinkedHeader = unlinkedPanelCandidateGroups.length > 0 && index === firstUnlinkedIndex
-                      const active = selectedCandidate?.candidate_id === group.candidate_id
                       const expanded = !!expandedCandidateInfo[group.candidate_id]
                       const baseSuggestions = group.suggestions || []
                       const isLinkedCandidate = !!group.rl_place_id
@@ -1558,9 +1171,7 @@ export function PoiArticleCatchup() {
                             "relative rounded-lg border p-2.5 pr-24",
                             isLinkedCandidate
                               ? "border-emerald-200 bg-emerald-50/30"
-                              : active
-                                ? "border-orange-300 bg-orange-50/40"
-                                : "border-stone-200 bg-white"
+                              : "border-stone-200 bg-white"
                           )}
                         >
                           <div className="flex items-center justify-between gap-2">
@@ -1626,7 +1237,14 @@ export function PoiArticleCatchup() {
                                   title="Relancer le scan POI réel pour ce candidat"
                                   aria-label="Relancer le scan POI réel pour ce candidat"
                                 >
-                                  <RefreshCw className={cn("h-4 w-4", recomputeCandidate.isPending && "animate-spin")} />
+                                  <RefreshCw
+                                    className={cn(
+                                      "h-4 w-4",
+                                      recomputeCandidate.isPending &&
+                                        recomputeCandidateInFlightId === group.candidate_id &&
+                                        "animate-spin"
+                                    )}
+                                  />
                                 </button>
                               ) : null}
                               {!isLinkedCandidate ? (
@@ -1658,7 +1276,7 @@ export function PoiArticleCatchup() {
                                     title="Retirer la liaison RL de ce candidat"
                                     aria-label="Retirer la liaison RL de ce candidat"
                                   >
-                                    <Trash2 className="h-4 w-4" />
+                                    <Link2 className="h-4 w-4" />
                                   </button>
                                   {unlinkConfirmCandidateId === group.candidate_id ? (
                                     <div className="absolute right-0 mt-1 z-20 w-56 rounded-md border border-red-200 bg-white shadow-sm p-2 text-[11px] text-stone-700">
@@ -1707,6 +1325,70 @@ export function PoiArticleCatchup() {
                                   ) : null}
                                 </div>
                               ) : null}
+                              <div className="relative">
+                                <button
+                                  type="button"
+                                  onClick={() =>
+                                    setRemoveConfirmCandidateId((prev) =>
+                                      prev === group.candidate_id ? null : group.candidate_id
+                                    )
+                                  }
+                                  disabled={mutationPending}
+                                  className="inline-flex items-center justify-center h-8 w-8 rounded border border-red-300 bg-white text-red-700 hover:bg-red-50 disabled:opacity-60"
+                                  title="Supprimer complètement ce candidat"
+                                  aria-label="Supprimer complètement ce candidat"
+                                >
+                                  <Trash2 className="h-4 w-4" />
+                                </button>
+                                {removeConfirmCandidateId === group.candidate_id ? (
+                                  <div className="absolute right-0 mt-1 z-20 w-64 rounded-md border border-red-200 bg-white shadow-sm p-2 text-[11px] text-stone-700">
+                                    <div className="mb-2">
+                                      Supprimer définitivement ce candidat hors sujet
+                                      {isLinkedCandidate ? " (avec son lien RL)" : ""} ?
+                                    </div>
+                                    <div className="flex items-center justify-end gap-1.5">
+                                      <button
+                                        type="button"
+                                        onClick={() => setRemoveConfirmCandidateId(null)}
+                                        className="px-2 py-1 rounded border border-stone-200 text-stone-600 hover:bg-stone-50"
+                                      >
+                                        Annuler
+                                      </button>
+                                      <button
+                                        type="button"
+                                        onClick={() =>
+                                          removeCandidate.mutate(
+                                            {
+                                              articleId: linkPanelRow.articleId,
+                                              candidateId: group.candidate_id,
+                                            },
+                                            {
+                                              onSuccess: () => {
+                                                setRemoveConfirmCandidateId(null)
+                                                setUnlinkConfirmCandidateId(null)
+                                                applyRemovedCandidateInPanel(group.candidate_id)
+                                                pushLog(
+                                                  "success",
+                                                  `Candidat supprimé (${decodeHtmlEntities(linkPanelRow.title)}) · ${decodeHtmlEntities(group.name)}`
+                                                )
+                                              },
+                                              onError: (error) =>
+                                                pushLog(
+                                                  "error",
+                                                  `Erreur suppression candidat (${decodeHtmlEntities(linkPanelRow.title)}): ${error.message}`
+                                                ),
+                                            }
+                                          )
+                                        }
+                                        disabled={mutationPending}
+                                        className="px-2 py-1 rounded border border-red-300 bg-red-50 text-red-700 hover:bg-red-100 disabled:opacity-60"
+                                      >
+                                        Supprimer
+                                      </button>
+                                    </div>
+                                  </div>
+                                ) : null}
+                              </div>
                             </div>
                           </div>
 
@@ -1833,183 +1515,72 @@ export function PoiArticleCatchup() {
                         </div>
                       )
                     })}
-                    {visiblePanelCandidateGroups.length === 0 ? (
-                      <div className="rounded-lg border border-stone-200 bg-stone-50 p-3 text-xs text-stone-500">
-                        Aucun candidat visible. Ouvre une section H1/H2/H3 dans l’article pour afficher les candidats/POI correspondants.
-                      </div>
-                    ) : null}
-                  </div>
+                  </CandidateListPanel>
                 </div>
               </div>
           </div>
         </div>
       )}
 
-      {annuaireModalCandidateId && annuaireModalCandidate && linkPanelRow && (
-        <div
-          className="fixed inset-0 z-50 bg-black/50 flex items-start justify-center p-4 overflow-y-auto"
-          onClick={() => setAnnuaireModalCandidateId(null)}
-        >
-          <div
-            className="bg-white rounded-xl w-full max-w-3xl shadow-xl border border-stone-200 max-h-[90vh] overflow-hidden flex flex-col"
-            onClick={(event) => event.stopPropagation()}
-          >
-            <div className="sticky top-0 z-10 bg-white border-b border-stone-200 px-5 py-4 flex items-start justify-between gap-3">
-              <div>
-                <h3 className="text-base font-semibold text-stone-800">Annuaire RL · Liaison manuelle</h3>
-                <p className="text-xs text-stone-500 mt-1">
-                  Candidat détecté: {decodeHtmlEntities(annuaireModalCandidate.name)}
-                </p>
-              </div>
-              <button
-                type="button"
-                onClick={() => setAnnuaireModalCandidateId(null)}
-                className="p-1.5 rounded border border-stone-200 text-stone-600 hover:bg-stone-50"
-                aria-label="Fermer annuaire RL"
-              >
-                <X className="h-4 w-4" />
-              </button>
-            </div>
-
-            <div className="px-5 py-4 overflow-y-auto space-y-3">
-              <div className="space-y-2">
-                <div className="text-xs text-stone-500">Moteur POI région (filtres)</div>
-                <div className="relative">
-                  <input
-                    value={regionPoiSearch}
-                    onChange={(e) => setRegionPoiSearch(e.target.value)}
-                    placeholder="Recherche nom, ID, cluster, type"
-                    className="w-full px-3 py-2 pr-9 rounded-lg border border-stone-200 text-sm"
-                  />
-                  {showRegionPoiSearchSpinner ? (
-                    <Loader2 className="absolute right-3 top-1/2 -translate-y-1/2 h-4 w-4 text-stone-400 animate-spin" />
-                  ) : null}
-                </div>
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
-                  <select
-                    value={regionPoiClusterFilter}
-                    onChange={(e) => setRegionPoiClusterFilter(e.target.value)}
-                    className="w-full px-3 py-2 rounded-lg border border-stone-200 text-sm bg-white"
-                  >
-                    <option value="">Tous les clusters</option>
-                    {availableClusterNames.map((name) => (
-                      <option key={name} value={name}>{name}</option>
-                    ))}
-                  </select>
-                  <select
-                    value={regionPoiTypeFilter}
-                    onChange={(e) => setRegionPoiTypeFilter(e.target.value)}
-                    className="w-full px-3 py-2 rounded-lg border border-stone-200 text-sm bg-white"
-                  >
-                    <option value="">Toutes les catégories</option>
-                    {availableTypeLabels.map((label) => (
-                      <option key={label} value={label}>{label}</option>
-                    ))}
-                  </select>
-                </div>
-                <div className="max-h-64 overflow-y-auto space-y-1 rounded-lg border border-stone-200 bg-white p-2">
-                  {showRegionPoiLoadingPlaceholder ? (
-                    <div className="flex items-center gap-2 text-xs text-stone-500 p-1">
-                      <Loader2 className="h-3.5 w-3.5 animate-spin text-stone-400" />
-                      Recherche des POI en cours...
-                    </div>
-                  ) : null}
-                  {filteredRegionPois.map((poi) => (
-                    <button
-                      key={poi.rl_place_id}
-                      type="button"
-                      onClick={() => {
-                        setSelectedRegionPoi({
-                          rl_place_id: poi.rl_place_id,
-                          name: poi.name,
-                          place_type: poi.place_type,
-                          place_type_label_fr: poi.place_type_label_fr,
-                          cluster_name: (poi.cluster_names || [])[0] || "Cluster inconnu",
-                        })
-                      }}
-                      className={cn(
-                        "w-full text-left rounded border px-2 py-1.5 hover:bg-stone-50",
-                        selectedRegionPoi?.rl_place_id === poi.rl_place_id
-                          ? "border-orange-300 bg-orange-50"
-                          : "border-stone-100"
-                      )}
-                    >
-                      <div className="text-xs text-stone-800">{decodeHtmlEntities(poi.name)}</div>
-                      <div className="text-[11px] text-stone-500">
-                        {decodeHtmlEntities(poi.place_type_label_fr || poi.place_type)} · {(poi.cluster_names || [])[0] || "Cluster inconnu"}
-                      </div>
-                    </button>
-                  ))}
-                  {!showRegionPoiLoadingPlaceholder && filteredRegionPois.length === 0 && (
-                    <div className="text-xs text-stone-500 p-1">Aucun POI trouvé avec ces filtres.</div>
-                  )}
-                </div>
-              </div>
-
-              <div className="space-y-2">
-                <div className="text-xs text-stone-500">Validation de la sélection</div>
-                {selectedRegionPoi ? (
-                  <div className="text-xs text-stone-700 rounded border border-stone-200 bg-stone-50 p-2">
-                    Sélectionné: {decodeHtmlEntities(selectedRegionPoi.name)} ·{" "}
-                    {decodeHtmlEntities(selectedRegionPoi.place_type_label_fr || selectedRegionPoi.place_type || "Type inconnu")} ·{" "}
-                    {decodeHtmlEntities(selectedRegionPoi.cluster_name || "Cluster inconnu")}
-                  </div>
-                ) : (
-                  <div className="text-xs text-stone-500 rounded border border-stone-200 bg-stone-50 p-2">
-                    Sélectionne un POI dans la liste pour le lier.
-                  </div>
-                )}
-                <button
-                  type="button"
-                  disabled={mutationPending || !selectedRegionPoi?.rl_place_id}
-                  onClick={() =>
-                    manualLink.mutate(
-                      {
-                        articleId: linkPanelRow.articleId,
-                        rlPlaceId: selectedRegionPoi?.rl_place_id || "",
-                        rlPlaceName: selectedRegionPoi?.name || undefined,
-                        placeType: selectedRegionPoi?.place_type,
-                        placeTypeLabelFr: selectedRegionPoi?.place_type_label_fr,
-                        clusterName: selectedRegionPoi?.cluster_name,
-                        candidateId: annuaireModalCandidate?.candidate_id || undefined,
-                        confidence: "high",
-                        score: 1,
-                        validated: true,
-                      },
-                      {
-                        onSuccess: () => {
-                          if (annuaireModalCandidate?.candidate_id && selectedRegionPoi?.rl_place_id) {
-                            applyLinkedCandidateInPanel({
-                              candidateId: annuaireModalCandidate.candidate_id,
-                              rlPlaceId: selectedRegionPoi.rl_place_id,
-                              rlPlaceName: selectedRegionPoi.name,
-                              placeType: selectedRegionPoi.place_type,
-                              placeTypeLabelFr: selectedRegionPoi.place_type_label_fr,
-                              clusterName: selectedRegionPoi.cluster_name,
-                            })
-                          }
-                          void backlog.refetch()
-                          pushLog(
-                            "success",
-                            `Liaison OK (${decodeHtmlEntities(linkPanelRow.title)}) -> ${selectedRegionPoi?.rl_place_id || ""}`
-                          )
-                          setAnnuaireModalCandidateId(null)
-                        },
-                        onError: (error) =>
-                          pushLog("error", `Erreur liaison manuelle (${decodeHtmlEntities(linkPanelRow.title)}): ${error.message}`),
-                      }
-                    )
-                  }
-                  className="inline-flex items-center gap-1.5 px-3 py-2 rounded-lg text-xs border border-stone-200 bg-white text-stone-700 hover:bg-stone-50 disabled:opacity-60"
-                >
-                  <Link2 className="h-3.5 w-3.5" />
-                  Valider et lier
-                </button>
-              </div>
-            </div>
-          </div>
-        </div>
-      )}
+      <AnnuaireModal
+        open={Boolean(annuaireModalCandidateId && annuaireModalCandidate && linkPanelRow)}
+        candidateName={annuaireModalCandidate?.name || ""}
+        articleTitle={linkPanelRow?.title || ""}
+        regionPoiSearch={regionPoiSearch}
+        onRegionPoiSearchChange={setRegionPoiSearch}
+        regionPoiClusterFilter={regionPoiClusterFilter}
+        onRegionPoiClusterFilterChange={setRegionPoiClusterFilter}
+        regionPoiTypeFilter={regionPoiTypeFilter}
+        onRegionPoiTypeFilterChange={setRegionPoiTypeFilter}
+        availableClusterNames={availableClusterNames}
+        availableTypeLabels={availableTypeLabels}
+        filteredRegionPois={filteredRegionPois}
+        showRegionPoiSearchSpinner={showRegionPoiSearchSpinner}
+        showRegionPoiLoadingPlaceholder={showRegionPoiLoadingPlaceholder}
+        selectedRegionPoi={selectedRegionPoi}
+        onSelectRegionPoi={setSelectedRegionPoi}
+        mutationPending={mutationPending}
+        onClose={() => setAnnuaireModalCandidateId(null)}
+        onValidateLink={() => {
+          if (!linkPanelRow || !selectedRegionPoi?.rl_place_id) return
+          manualLink.mutate(
+            {
+              articleId: linkPanelRow.articleId,
+              rlPlaceId: selectedRegionPoi.rl_place_id,
+              rlPlaceName: selectedRegionPoi?.name || undefined,
+              placeType: selectedRegionPoi?.place_type,
+              placeTypeLabelFr: selectedRegionPoi?.place_type_label_fr,
+              clusterName: selectedRegionPoi?.cluster_name,
+              candidateId: annuaireModalCandidate?.candidate_id || undefined,
+              confidence: "high",
+              score: 1,
+              validated: true,
+            },
+            {
+              onSuccess: () => {
+                if (annuaireModalCandidate?.candidate_id && selectedRegionPoi?.rl_place_id) {
+                  applyLinkedCandidateInPanel({
+                    candidateId: annuaireModalCandidate.candidate_id,
+                    rlPlaceId: selectedRegionPoi.rl_place_id,
+                    rlPlaceName: selectedRegionPoi.name,
+                    placeType: selectedRegionPoi.place_type,
+                    placeTypeLabelFr: selectedRegionPoi.place_type_label_fr,
+                    clusterName: selectedRegionPoi.cluster_name,
+                  })
+                }
+                void backlog.refetch()
+                pushLog(
+                  "success",
+                  `Liaison OK (${decodeHtmlEntities(linkPanelRow.title)}) -> ${selectedRegionPoi?.rl_place_id || ""}`
+                )
+                setAnnuaireModalCandidateId(null)
+              },
+              onError: (error) =>
+                pushLog("error", `Erreur liaison manuelle (${decodeHtmlEntities(linkPanelRow.title)}): ${error.message}`),
+            }
+          )
+        }}
+      />
 
       {imagePreviewSrc && (
         <div
@@ -2037,65 +1608,24 @@ export function PoiArticleCatchup() {
         </div>
       )}
 
-      {scanModalOpen && (
-        <div className="fixed inset-0 bg-black/50 flex items-start justify-center z-50 p-4 overflow-y-auto">
-          <div className="bg-white rounded-xl w-full max-w-xl shadow-xl border border-stone-200 max-h-[90vh] overflow-hidden flex flex-col">
-            <div className="sticky top-0 z-10 bg-white border-b border-stone-200 px-6 py-4 flex items-start justify-between gap-4">
-              <div>
-                <h3 className="text-lg font-semibold text-stone-800">Scan POI en cours</h3>
-                <p className="text-sm text-stone-500 mt-1">Site: {selectedSite.name}</p>
-              </div>
-              {!recompute.isPending && (
-                <button
-                  type="button"
-                  onClick={() => setScanModalOpen(false)}
-                  className="px-2.5 py-1.5 rounded-lg text-xs border border-stone-200 text-stone-700 hover:bg-stone-50"
-                >
-                  Fermer
-                </button>
-              )}
-            </div>
-            <div className="px-6 py-4 overflow-y-auto">
+      <ActionLogWidget
+        logs={actionLogs}
+        isOpen={isLogWidgetOpen}
+        hasBlockingLogs={hasBlockingActionLogs}
+        onOpen={() => setIsLogWidgetOpen(true)}
+        onClose={() => setIsLogWidgetOpen(false)}
+      />
 
-              {recompute.isPending ? (
-                <div className="rounded-lg border border-orange-200 bg-orange-50 p-3 text-sm text-orange-800 flex items-center gap-2">
-                  <Loader2 className="h-4 w-4 animate-spin" />
-                  Refresh WordPress complet (html/images/urls) + matching POI par cluster...
-                </div>
-              ) : recompute.isError ? (
-                <div className="rounded-lg border border-red-200 bg-red-50 p-3 text-sm text-red-700">
-                  {(recompute.error as Error).message}
-                </div>
-              ) : recompute.data?.summary ? (
-                <div className="rounded-lg border border-green-200 bg-green-50 p-3 text-sm text-green-800 space-y-1">
-                  <div>Scan terminé: {recompute.data.summary.updated} articles recalculés</div>
-                  <div>Refresh WP: {recompute.data.summary.refreshed} OK · {recompute.data.summary.refreshFailed} KO</div>
-                  <div>POI RL lus: {recompute.data.summary.rlPlacesLoaded}</div>
-                  <div>A revue: {recompute.data.summary.needsReview} · Pending: {recompute.data.summary.pending}</div>
-                </div>
-              ) : (
-                <div className="rounded-lg border border-stone-200 bg-stone-50 p-3 text-sm text-stone-700">
-                  Le scan va démarrer.
-                </div>
-              )}
-
-              {actionLogs.length > 0 && (
-                <div className="mt-4">
-                  <h4 className="text-sm font-medium text-stone-700 mb-2">Derniers événements</h4>
-                  <div className="space-y-1 max-h-36 overflow-auto">
-                    {actionLogs.slice(0, 8).map((log) => (
-                      <div key={log.id} className="text-xs text-stone-600 flex items-center gap-2">
-                        <span className="text-stone-400 min-w-[54px]">{formatLogTime(log.at)}</span>
-                        <span>{log.message}</span>
-                      </div>
-                    ))}
-                  </div>
-                </div>
-              )}
-            </div>
-          </div>
-        </div>
-      )}
+      <ScanModal
+        open={scanModalOpen}
+        siteName={selectedSite.name}
+        isPending={recompute.isPending}
+        isError={recompute.isError}
+        errorMessage={recompute.isError ? (recompute.error as Error).message : undefined}
+        summary={recompute.data?.summary || null}
+        logs={actionLogs}
+        onClose={() => setScanModalOpen(false)}
+      />
 
     </div>
   )

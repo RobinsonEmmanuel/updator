@@ -1,5 +1,6 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
 import { ingestionApiUrl, ingestionFetch } from "@/lib/api"
+import { mapBacklogResponse } from "@/features/article-poi-catchup/articlePoiMapper"
 
 export type PoiAssociationStatus = "pending" | "needs_review" | "linked" | "created" | "ignored"
 export type PoiConfidence = "high" | "medium" | "low"
@@ -62,20 +63,6 @@ export interface PoiCandidateGroup {
   updated_at?: string
 }
 
-export interface PoiAssociation {
-  status?: PoiAssociationStatus
-  rl_place_id?: string
-  rl_place_name?: string
-  rl_region_id?: string
-  matched_automatically?: boolean
-  confidence?: PoiConfidence
-  score?: number
-  validated?: boolean
-  candidate_id?: string
-  created_via_write?: boolean
-  updated_at?: string
-}
-
 export interface ArticlePoiBacklogRow {
   articleId: string
   wpPostId: number
@@ -84,17 +71,13 @@ export interface ArticlePoiBacklogRow {
   categories: string[]
   wpModifiedAt: string | null
   status: PoiAssociationStatus
-  candidateName: string
-  suggestions: PoiSuggestion[]
-  rlSuggestions?: PoiSuggestion[]
-  candidateGroups: PoiCandidateGroup[]
-  detectedCandidates?: PoiCandidateGroup[]
+  detectedCandidates: PoiCandidateGroup[]
   detectedCandidatesCount?: number
   unmatchedCandidatesCount?: number
-  association: PoiAssociation | null
-  associatedPoiCount: number
   linkedPoiCount?: number
   hasLinkedPoi?: boolean
+  poiScanValidated?: boolean
+  poiScanValidatedAt?: string | null
   articleUrl: string | null
   htmlBrut: string
   htmlCleaned?: string
@@ -140,6 +123,13 @@ interface RecomputeArticleResponse {
   refreshed: boolean
 }
 
+interface SetScanValidationResponse {
+  success: boolean
+  articleId: string
+  poiScanValidated: boolean
+  poiScanValidatedAt: string | null
+}
+
 interface RecomputeCandidateResponse {
   success: boolean
   articleId: string
@@ -166,6 +156,55 @@ interface SiteCategory {
   slug: string
   count: number
   parent: number
+}
+
+function computeDerivedCounts(candidates: PoiCandidateGroup[]) {
+  const linkedCandidates = candidates.filter((candidate) => !!candidate.rl_place_id)
+  const unmatchedCandidates = candidates.filter(
+    (candidate) => !candidate.rl_place_id && (candidate.suggestions || []).length === 0
+  )
+  return {
+    detectedCandidatesCount: candidates.length,
+    linkedPoiCount: linkedCandidates.length,
+    hasLinkedPoi: linkedCandidates.length > 0,
+    unmatchedCandidatesCount: unmatchedCandidates.length,
+  }
+}
+
+function updateBacklogRows(
+  queryClient: ReturnType<typeof useQueryClient>,
+  siteId: string | undefined,
+  updater: (row: ArticlePoiBacklogRow) => ArticlePoiBacklogRow
+) {
+  if (!siteId) return
+  queryClient.setQueriesData<BacklogResponse>(
+    {
+      predicate: (query) =>
+        Array.isArray(query.queryKey) &&
+        query.queryKey[0] === "article-poi-backlog" &&
+        query.queryKey[1] === siteId,
+    },
+    (old) => {
+      if (!old) return old
+      return {
+        ...old,
+        data: old.data.map(updater),
+      }
+    }
+  )
+}
+
+function invalidateBacklog(
+  queryClient: ReturnType<typeof useQueryClient>,
+  siteId: string | undefined,
+  refetchType?: "none"
+) {
+  if (!siteId) return
+  if (refetchType) {
+    queryClient.invalidateQueries({ queryKey: ["article-poi-backlog", siteId], refetchType })
+    return
+  }
+  queryClient.invalidateQueries({ queryKey: ["article-poi-backlog", siteId] })
 }
 
 export function useArticlePoiBacklog(params: {
@@ -209,7 +248,7 @@ export function useArticlePoiBacklog(params: {
       const res = await ingestionFetch(ingestionApiUrl(`/api/v1/article-poi/backlog?${qs.toString()}`))
       const data = (await res.json().catch(() => ({}))) as BacklogResponse & { error?: string }
       if (!res.ok) throw new Error(data.error || "Failed to load article-poi backlog")
-      return data
+      return mapBacklogResponse(data) as BacklogResponse
     },
     enabled: !!siteId,
     staleTime: 60 * 1000,
@@ -232,7 +271,7 @@ export function useArticlePoiRecompute(siteId?: string) {
       return data
     },
     onSuccess: () => {
-      if (siteId) queryClient.invalidateQueries({ queryKey: ["article-poi-backlog", siteId] })
+      invalidateBacklog(queryClient, siteId)
     },
   })
 }
@@ -251,8 +290,46 @@ export function useArticlePoiRecomputeArticle(siteId?: string) {
       if (!res.ok) throw new Error(data.error || "Failed to recompute article")
       return data
     },
-    onSuccess: () => {
-      if (siteId) queryClient.invalidateQueries({ queryKey: ["article-poi-backlog", siteId] })
+    onSuccess: (result, variables) => {
+      updateBacklogRows(queryClient, siteId, (row) => {
+        if (row.articleId !== variables.articleId) return row
+        if (!result.refreshed) return row
+        return {
+          ...row,
+          poiScanValidated: false,
+          poiScanValidatedAt: null,
+        }
+      })
+      invalidateBacklog(queryClient, siteId)
+    },
+  })
+}
+
+export function useArticlePoiSetScanValidation(siteId?: string) {
+  const queryClient = useQueryClient()
+  return useMutation<SetScanValidationResponse, Error, { articleId: string; validated: boolean }>({
+    mutationFn: async ({ articleId, validated }) => {
+      if (!siteId) throw new Error("No site selected")
+      const res = await ingestionFetch(ingestionApiUrl(`/api/v1/article-poi/${articleId}/scan-validation`), {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ siteId, validated }),
+      })
+      const data = (await res.json().catch(() => ({}))) as SetScanValidationResponse & { error?: string }
+      if (!res.ok) throw new Error(data.error || "Failed to update scan validation")
+      return data
+    },
+    onSuccess: (result, variables) => {
+      updateBacklogRows(queryClient, siteId, (row) =>
+        row.articleId === variables.articleId
+          ? {
+              ...row,
+              poiScanValidated: result.poiScanValidated,
+              poiScanValidatedAt: result.poiScanValidatedAt,
+            }
+          : row
+      )
+      invalidateBacklog(queryClient, siteId, "none")
     },
   })
 }
@@ -275,8 +352,19 @@ export function useArticlePoiRecomputeCandidate(siteId?: string) {
       if (!res.ok) throw new Error(data.error || "Failed to recompute candidate")
       return data
     },
-    onSuccess: () => {
-      if (siteId) queryClient.invalidateQueries({ queryKey: ["article-poi-backlog", siteId] })
+    onSuccess: (result, variables) => {
+      updateBacklogRows(queryClient, siteId, (row) => {
+        if (row.articleId !== variables.articleId) return row
+        const nextCandidates = (row.detectedCandidates || []).map((candidate) =>
+          candidate.candidate_id === variables.candidateId ? result.candidate : candidate
+        )
+        return {
+          ...row,
+          detectedCandidates: nextCandidates,
+          ...computeDerivedCounts(nextCandidates),
+        }
+      })
+      invalidateBacklog(queryClient, siteId, "none")
     },
   })
 }
@@ -299,8 +387,21 @@ export function useArticlePoiMarkCandidate(siteId?: string) {
       if (!res.ok) throw new Error(data.error || "Failed to mark candidate")
       return data
     },
-    onSuccess: () => {
-      if (siteId) queryClient.invalidateQueries({ queryKey: ["article-poi-backlog", siteId] })
+    onSuccess: (result, variables) => {
+      updateBacklogRows(queryClient, siteId, (row) => {
+        if (row.articleId !== variables.articleId) return row
+        const currentCandidates = row.detectedCandidates || []
+        const hasCandidate = currentCandidates.some((candidate) => candidate.candidate_id === result.candidateId)
+        const nextCandidates = hasCandidate
+          ? currentCandidates.map((candidate) => (candidate.candidate_id === result.candidateId ? result.candidate : candidate))
+          : [result.candidate, ...currentCandidates]
+        return {
+          ...row,
+          detectedCandidates: nextCandidates,
+          ...computeDerivedCounts(nextCandidates),
+        }
+      })
+      invalidateBacklog(queryClient, siteId, "none")
     },
   })
 }
@@ -343,8 +444,32 @@ export function useArticlePoiManualLink(siteId?: string) {
       if (!res.ok) throw new Error(data.error || "Failed to link POI")
       return data
     },
-    onSuccess: () => {
-      if (siteId) queryClient.invalidateQueries({ queryKey: ["article-poi-backlog", siteId] })
+    onSuccess: (_result, payload) => {
+      updateBacklogRows(queryClient, siteId, (row) => {
+        if (row.articleId !== payload.articleId || !payload.candidateId) return row
+        const nextCandidates = (row.detectedCandidates || []).map((candidate) =>
+          candidate.candidate_id === payload.candidateId
+            ? {
+                ...candidate,
+                rl_place_id: payload.rlPlaceId,
+                rl_place_name: payload.rlPlaceName || candidate.rl_place_name || candidate.name,
+                rl_place_type: payload.placeType || candidate.rl_place_type,
+                rl_place_type_label_fr: payload.placeTypeLabelFr || candidate.rl_place_type_label_fr,
+                rl_cluster_id: payload.clusterId || candidate.rl_cluster_id,
+                rl_cluster_name: payload.clusterName || candidate.rl_cluster_name,
+                link_status: "linked" as PoiAssociationStatus,
+                validated: payload.validated ?? true,
+                suggestions: [],
+              }
+            : candidate
+        )
+        return {
+          ...row,
+          detectedCandidates: nextCandidates,
+          ...computeDerivedCounts(nextCandidates),
+        }
+      })
+      invalidateBacklog(queryClient, siteId, "none")
     },
   })
 }
@@ -366,8 +491,80 @@ export function useArticlePoiUnlink(siteId?: string) {
       if (!res.ok) throw new Error(data.error || "Failed to unlink POI")
       return data
     },
-    onSuccess: () => {
-      if (siteId) queryClient.invalidateQueries({ queryKey: ["article-poi-backlog", siteId] })
+    onSuccess: (_result, payload) => {
+      updateBacklogRows(queryClient, siteId, (row) => {
+        if (row.articleId !== payload.articleId) return row
+        const nextCandidates = (row.detectedCandidates || []).map((candidate) =>
+          candidate.candidate_id === payload.candidateId
+            ? {
+                ...candidate,
+                rl_place_id: undefined,
+                rl_place_name: null,
+                rl_place_type: undefined,
+                rl_place_type_label_fr: undefined,
+                rl_cluster_id: undefined,
+                rl_cluster_name: undefined,
+                validated: false,
+                link_status: "needs_review" as PoiAssociationStatus,
+              }
+            : candidate
+        )
+        return {
+          ...row,
+          detectedCandidates: nextCandidates,
+          ...computeDerivedCounts(nextCandidates),
+        }
+      })
+      invalidateBacklog(queryClient, siteId, "none")
+    },
+  })
+}
+
+export function useArticlePoiRemoveCandidate(siteId?: string) {
+  const queryClient = useQueryClient()
+  return useMutation<
+    { success: boolean; articleId: string; removedCandidateId: string; remainingCandidates: number },
+    Error,
+    { articleId: string; candidateId: string }
+  >({
+    mutationFn: async (payload: { articleId: string; candidateId: string }) => {
+      if (!siteId) throw new Error("No site selected")
+      const res = await ingestionFetch(ingestionApiUrl(`/api/v1/article-poi/${payload.articleId}/candidate/remove`), {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          siteId,
+          candidateId: payload.candidateId,
+        }),
+      })
+      const data = (await res.json().catch(() => ({}))) as {
+        success?: boolean
+        articleId?: string
+        removedCandidateId?: string
+        remainingCandidates?: number
+        error?: string
+      }
+      if (!res.ok) throw new Error(data.error || "Failed to remove candidate")
+      return {
+        success: !!data.success,
+        articleId: data.articleId || payload.articleId,
+        removedCandidateId: data.removedCandidateId || payload.candidateId,
+        remainingCandidates: data.remainingCandidates ?? 0,
+      }
+    },
+    onSuccess: (_result, payload) => {
+      updateBacklogRows(queryClient, siteId, (row) => {
+        if (row.articleId !== payload.articleId) return row
+        const nextCandidates = (row.detectedCandidates || []).filter((candidate) => candidate.candidate_id !== payload.candidateId)
+        return {
+          ...row,
+          detectedCandidates: nextCandidates,
+          ...computeDerivedCounts(nextCandidates),
+        }
+      })
+      if (siteId) {
+        invalidateBacklog(queryClient, siteId, "none")
+      }
     },
   })
 }
@@ -399,7 +596,7 @@ export function useArticlePoiCreateRl(siteId?: string) {
       return data
     },
     onSuccess: () => {
-      if (siteId) queryClient.invalidateQueries({ queryKey: ["article-poi-backlog", siteId] })
+      invalidateBacklog(queryClient, siteId)
     },
   })
 }

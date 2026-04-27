@@ -1,5 +1,5 @@
-import { useSearchParams, Link } from "react-router-dom"
-import { Search, X, Calendar, ChevronRight, Filter, Clock, ChevronDown, Settings, Loader2 } from "lucide-react"
+import { useSearchParams, Link, useNavigate } from "react-router-dom"
+import { Search, X, Calendar, ChevronRight, Filter, Clock, ChevronDown, Settings, Loader2, ExternalLink } from "lucide-react"
 import { useState, useMemo, useRef, useEffect } from "react"
 import { BundleProgressBanner } from "@/components/shared"
 import { useWpSiteData, useAllSitesData, type WpPostWithSite } from "@/hooks"
@@ -68,6 +68,7 @@ function NoSitesMessage() {
 export function WorkQueue() {
   const [searchParams, setSearchParams] = useSearchParams()
   const { selectedSite, hasNoSites, isLoading: sitesLoading, isAllSitesSelected } = useSiteContext()
+  const navigate = useNavigate()
   
   const categoryId = searchParams.get("categoryId")
     ? parseInt(searchParams.get("categoryId")!, 10)
@@ -381,45 +382,69 @@ export function WorkQueue() {
         </div>
       ) : (
         <div className="bg-white/60 backdrop-blur-sm rounded-xl shadow-sm shadow-stone-100 divide-y divide-stone-100">
-          {sortedPosts.map((post) => (
-            <a
-              key={
-                "_siteId" in post && post._siteId
-                  ? `${post._siteId}-${post.id}`
-                  : String(post.id)
-              }
-              href={post.link}
-              target="_blank"
-              rel="noopener noreferrer"
-              className="w-full flex items-center gap-4 px-4 py-3 hover:bg-stone-50 transition-colors text-left group"
-            >
-              {/* Indicateur ancienneté */}
-              <div className={`w-2 h-2 rounded-full flex-shrink-0 ${
-                isOlderThanOneYear(post.modified) ? "bg-red-400" : "bg-teal-400"
-              }`} />
+          {sortedPosts.map((post) => {
+            const wpPost = post as WpPostWithSite
+            const targetSiteId = wpPost._siteId || selectedSite?._id
+            const rowKey = targetSiteId ? `${targetSiteId}-${post.id}` : String(post.id)
+            const canOpenUpdateWorkspace = typeof targetSiteId === "string" && targetSiteId.length > 0
+            return (
+              <div
+                key={rowKey}
+                className={cn(
+                  "w-full flex items-center gap-4 px-4 py-3 transition-colors text-left group",
+                  canOpenUpdateWorkspace ? "hover:bg-stone-50 cursor-pointer" : "hover:bg-stone-50"
+                )}
+                onClick={() => {
+                  if (!canOpenUpdateWorkspace || !targetSiteId) return
+                  navigate(`/queue/article-update/${targetSiteId}/${post.id}`)
+                }}
+                role={canOpenUpdateWorkspace ? "button" : undefined}
+                tabIndex={canOpenUpdateWorkspace ? 0 : -1}
+                onKeyDown={(event) => {
+                  if (!canOpenUpdateWorkspace || !targetSiteId) return
+                  if (event.key !== "Enter" && event.key !== " ") return
+                  event.preventDefault()
+                  navigate(`/queue/article-update/${targetSiteId}/${post.id}`)
+                }}
+              >
+                {/* Indicateur ancienneté */}
+                <div className={`w-2 h-2 rounded-full flex-shrink-0 ${
+                  isOlderThanOneYear(post.modified) ? "bg-red-400" : "bg-teal-400"
+                }`} />
 
-              {/* Titre & info */}
-              <div className="flex-1 min-w-0">
-                <h3 className="text-sm font-medium text-stone-700 truncate group-hover:text-stone-900">
-                  {decodeHtmlEntities(post.title.rendered)}
-                </h3>
-                <div className="flex items-center gap-2 mt-0.5 text-xs text-stone-400">
-                  {!categoryId && (
-                    <>
-                      <span>{getCategoryName(post)}</span>
-                      <span>·</span>
-                    </>
-                  )}
-                  <span className="flex items-center gap-1">
-                    <Calendar className="h-3 w-3" />
-                    {formatDate(post.modified)}
-                  </span>
+                {/* Titre & info */}
+                <div className="flex-1 min-w-0">
+                  <h3 className="text-sm font-medium text-stone-700 truncate group-hover:text-stone-900">
+                    {decodeHtmlEntities(post.title.rendered)}
+                  </h3>
+                  <div className="flex items-center gap-2 mt-0.5 text-xs text-stone-400">
+                    {!categoryId && (
+                      <>
+                        <span>{getCategoryName(post)}</span>
+                        <span>·</span>
+                      </>
+                    )}
+                    <span className="flex items-center gap-1">
+                      <Calendar className="h-3 w-3" />
+                      {formatDate(post.modified)}
+                    </span>
+                  </div>
                 </div>
-              </div>
 
-              <ChevronRight className="h-4 w-4 text-stone-300 group-hover:text-stone-400" />
-            </a>
-          ))}
+                <a
+                  href={post.link}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  onClick={(event) => event.stopPropagation()}
+                  className="inline-flex items-center gap-1.5 text-xs text-stone-500 hover:text-stone-700 px-2 py-1 rounded hover:bg-stone-100"
+                >
+                  WP
+                  <ExternalLink className="h-3 w-3" />
+                </a>
+                <ChevronRight className="h-4 w-4 text-stone-300 group-hover:text-stone-400" />
+              </div>
+            )
+          })}
         </div>
       )}
     </div>

@@ -10,6 +10,7 @@ import { Reporting } from "@/pages/Reporting"
 import { Settings } from "@/pages/Settings"
 import { ClusterMappings } from "@/pages/ClusterMappings"
 import { PoiArticleCatchup } from "@/pages/PoiArticleCatchup"
+import { ArticleUpdateWorkspace } from "@/pages/ArticleUpdateWorkspace"
 
 export const router = createBrowserRouter([
   {
@@ -34,6 +35,10 @@ export const router = createBrowserRouter([
           {
             path: "article/:id",
             element: <ArticleEditor />,
+          },
+          {
+            path: "queue/article-update/:siteId/:postId",
+            element: <ArticleUpdateWorkspace />,
           },
           {
             path: "signaux",

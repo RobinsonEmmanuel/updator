@@ -3,7 +3,6 @@
     "id": "check-liens-generaux",
     "label": "Liens généraux vérifiés",
     "description": "Vérifier que tous les liens externes fonctionnent et pointent vers les bonnes pages.",
-    "applicableTo": "all",
     "order": 1,
     "active": true,
     "category": "liens"
@@ -12,7 +11,6 @@
     "id": "check-booking",
     "label": "Liens Booking vérifiés",
     "description": "Vérifier les liens d'affiliation Booking : hôtels toujours disponibles, prix cohérents.",
-    "applicableTo": ["hebergement", "editorial", "bon_plan"],
     "order": 2,
     "active": true,
     "category": "liens"
@@ -21,7 +19,6 @@
     "id": "check-gyg",
     "label": "Liens GYG vérifiés",
     "description": "Rappel : toujours pointer vers une page de recherche GetYourGuide, jamais un tour précis.",
-    "applicableTo": ["activite", "editorial"],
     "order": 3,
     "active": true,
     "category": "liens"
@@ -30,7 +27,6 @@
     "id": "check-viator",
     "label": "Liens Viator vérifiés",
     "description": "Vérifier que les activités Viator sont toujours disponibles et les prix à jour.",
-    "applicableTo": ["activite"],
     "order": 4,
     "active": true,
     "category": "liens"
@@ -39,7 +35,6 @@
     "id": "check-prix-horaires",
     "label": "Prix et horaires vérifiés",
     "description": "Mettre à jour les prix d'entrée, horaires d'ouverture, et toute info pratique.",
-    "applicableTo": "all",
     "order": 5,
     "active": true,
     "category": "contenu"
@@ -48,7 +43,6 @@
     "id": "check-existence-lieux",
     "label": "Existence des lieux vérifiée",
     "description": "Confirmer que les hôtels, restaurants, musées et activités mentionnés existent toujours.",
-    "applicableTo": ["hebergement", "restaurant", "activite"],
     "order": 6,
     "active": true,
     "category": "contenu"
@@ -57,7 +51,6 @@
     "id": "check-liens-internes",
     "label": "Liens internes vérifiés",
     "description": "Vérifier le maillage interne. Alerte si < 3 ou > 15 liens internes.",
-    "applicableTo": "all",
     "order": 7,
     "active": true,
     "category": "liens"
@@ -66,7 +59,6 @@
     "id": "check-infos-recentes",
     "label": "Infos récentes recherchées",
     "description": "Utiliser GPT ou Perplexity pour trouver des informations récentes sur la destination.",
-    "applicableTo": "all",
     "order": 8,
     "active": true,
     "category": "contenu"
@@ -75,7 +67,6 @@
     "id": "check-wpml",
     "label": "Traductions WPML validées",
     "description": "Dans le BO WordPress : actions groupées → approuver les traductions.",
-    "applicableTo": "all",
     "order": 9,
     "active": true,
     "category": "traduction"
@@ -84,7 +75,6 @@
     "id": "check-urls-traduits",
     "label": "URLs traduits vérifiés",
     "description": "Ouvrir l'article, changer de langue, vérifier que l'URL traduit existe (bug WPML connu).",
-    "applicableTo": "all",
     "order": 10,
     "active": true,
     "category": "traduction"
@@ -93,7 +83,6 @@
     "id": "check-box-avion",
     "label": "Box avion ajoutée",
     "description": "Vérifier la présence du module de recherche de vols dans les articles éditoriaux.",
-    "applicableTo": ["editorial", "bon_plan"],
     "order": 11,
     "active": true,
     "category": "structure"

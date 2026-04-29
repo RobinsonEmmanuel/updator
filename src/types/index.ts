@@ -87,11 +87,17 @@ export interface Article {
 export interface ChecklistItem {
   id: string
   label: string
+  title: string
   description: string
-  applicableTo: ArticleType[] | "all"
+  mainPrompt: string
+  additionalPrompts: string[]
+  technicalHints: {
+    examples?: string[]
+    notes?: string
+  }
   order: number
   active: boolean
-  category: ChecklistCategory
+  category: ChecklistCategory | string
 }
 
 export interface Signal {

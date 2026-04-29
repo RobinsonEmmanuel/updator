@@ -1,4 +1,11 @@
-export { useChecklistItems, useChecklistItemsForType } from "./useChecklistItems"
+export {
+  useChecklistItems,
+  useCreateTodoItem,
+  useUpdateTodoItem,
+  useDeleteTodoItem,
+  useReorderTodoItems,
+  useImportLegacyTodoItems,
+} from "./useChecklistItems"
 export { useSignals, useOpenSignals, useResolveSignal, useDismissSignal, useCreateSignal } from "./useSignals"
 export { useDrafts, useDraftForArticle, useCreateDraft, useUpdateDraft, useMarkDraftReady, usePushDraft, useDeleteDraft } from "./useDrafts"
 export { useWpPosts, useWpPostsInfinite, useWpPost, useWpCategories } from "./useWpArticles"

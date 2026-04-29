@@ -165,6 +165,7 @@ export function ArticleUpdateWorkspace() {
     () => checklistItems.filter((item) => localChecks[`${siteId}:${postId}:${item.id}`]).length,
     [checklistItems, localChecks, siteId, postId]
   )
+  const allChecklistChecked = checklistItems.length > 0 && checkedCount === checklistItems.length
 
   const postTitle = decodeHtmlEntities(listPost?.title?.rendered || wpPostQuery.data?.title?.rendered || "Article")
   const categoryLabel = (listPost?.categories || []).map((id) => categoriesById.get(id)).filter(Boolean).join(", ")
@@ -179,6 +180,26 @@ export function ArticleUpdateWorkspace() {
 
   const toggleSection = (sectionId: string) => {
     setOpenSectionIds((prev) => (prev.includes(sectionId) ? prev.filter((id) => id !== sectionId) : [...prev, sectionId]))
+  }
+
+  const runAllTodoActions = () => {
+    setLocalChecks((prev) => {
+      const next = { ...prev }
+      checklistItems.forEach((item) => {
+        next[`${siteId}:${postId}:${item.id}`] = true
+      })
+      return next
+    })
+  }
+
+  const resetAllTodoActions = () => {
+    setLocalChecks((prev) => {
+      const next = { ...prev }
+      checklistItems.forEach((item) => {
+        delete next[`${siteId}:${postId}:${item.id}`]
+      })
+      return next
+    })
   }
 
   const handleSectionContentClick = (event: MouseEvent<HTMLElement>) => {
@@ -371,30 +392,58 @@ export function ArticleUpdateWorkspace() {
           ) : (
             <div className="p-3 space-y-2 max-h-[70vh] overflow-y-auto">
               {checklistQuery.isLoading ? <p className="text-xs text-stone-500 px-1 py-1">Chargement de la todo…</p> : null}
+              {!checklistQuery.isLoading ? (
+                <div className="flex items-center justify-between rounded border border-stone-200 bg-stone-50 px-2 py-1.5">
+                  <p className="text-[11px] text-stone-600">
+                    {checkedCount}/{checklistItems.length} actions faites
+                  </p>
+                  <button
+                    type="button"
+                    onClick={allChecklistChecked ? resetAllTodoActions : runAllTodoActions}
+                    className={cn(
+                      "px-2 py-1 rounded text-[11px] border",
+                      allChecklistChecked
+                        ? "border-stone-200 text-stone-700 hover:bg-white"
+                        : "border-emerald-200 text-emerald-700 hover:bg-emerald-50"
+                    )}
+                  >
+                    {allChecklistChecked ? "Réinitialiser tout" : "Lancer toutes les actions"}
+                  </button>
+                </div>
+              ) : null}
               {checklistItems.map((item) => {
                 const key = `${siteId}:${postId}:${item.id}`
                 const checked = !!localChecks[key]
+                const displayTitle = item.title || item.label
                 return (
                   <label key={item.id} className={cn("rounded border px-2 py-2 block cursor-pointer", checked ? "border-emerald-300 bg-emerald-50/80" : "border-stone-200 bg-stone-50/70")}>
-                    <div className="flex items-start gap-2">
-                      <input
-                        type="checkbox"
-                        checked={checked}
-                        onChange={() =>
+                    <div className="flex items-start justify-between gap-2">
+                      <div className="min-w-0">
+                        <p className="text-xs font-medium text-stone-800 flex items-center gap-1.5">
+                          {checked ? <CheckCircle2 className="h-3.5 w-3.5 text-emerald-600" /> : null}
+                          {displayTitle}
+                        </p>
+                        <p className="text-[11px] text-stone-500 mt-0.5">{item.description}</p>
+                      </div>
+                      <button
+                        type="button"
+                        onClick={(event) => {
+                          event.preventDefault()
+                          event.stopPropagation()
                           setLocalChecks((prev) => ({
                             ...prev,
                             [key]: !prev[key],
                           }))
-                        }
-                        className="mt-0.5 h-3.5 w-3.5 rounded border-stone-300 text-emerald-600"
-                      />
-                      <div className="min-w-0">
-                        <p className="text-xs font-medium text-stone-800 flex items-center gap-1.5">
-                          {checked ? <CheckCircle2 className="h-3.5 w-3.5 text-emerald-600" /> : null}
-                          {item.label}
-                        </p>
-                        <p className="text-[11px] text-stone-500 mt-0.5">{item.description}</p>
-                      </div>
+                        }}
+                        className={cn(
+                          "shrink-0 px-2 py-1 rounded text-[11px] border",
+                          checked
+                            ? "border-stone-200 text-stone-700 hover:bg-white"
+                            : "border-emerald-200 text-emerald-700 hover:bg-emerald-50"
+                        )}
+                      >
+                        {checked ? "Action faite" : "Lancer l'action"}
+                      </button>
                     </div>
                   </label>
                 )

@@ -6,6 +6,7 @@ import signalsRouter from "./routes/signals"
 import draftsRouter from "./routes/drafts"
 import authRouter from "./routes/auth"
 import clusterMappingsRouter from "./routes/clusterMappings"
+import todoConfigRouter, { ensureTodoConfigSeeded } from "./routes/todoConfig"
 import { requireAuth } from "./middleware/requireAuth"
 import { Signal } from "./models/Signal"
 import { Draft } from "./models/Draft"
@@ -23,6 +24,7 @@ app.use("/api/auth", authRouter)
 app.use("/api/signals", requireAuth, signalsRouter)
 app.use("/api/drafts", requireAuth, draftsRouter)
 app.use("/api/cluster-mappings", requireAuth, clusterMappingsRouter)
+app.use("/api/todo-config", requireAuth, todoConfigRouter)
 
 // Health check
 app.get("/api/health", (_req, res) => {
@@ -58,6 +60,11 @@ async function seedIfEmpty() {
     ]
     await Draft.insertMany(mockDrafts)
     console.log(`✓ Seeded ${mockDrafts.length} drafts`)
+  }
+
+  const todoSeed = await ensureTodoConfigSeeded(false)
+  if (todoSeed.seeded > 0) {
+    console.log(`✓ Seeded ${todoSeed.seeded} todo config items`)
   }
 }
 

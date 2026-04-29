@@ -53,7 +53,7 @@ export function ScanModal({
           {isPending ? (
             <div className="rounded-lg border border-orange-200 bg-orange-50 p-3 text-sm text-orange-800 flex items-center gap-2">
               <Loader2 className="h-4 w-4 animate-spin" />
-              Refresh WordPress complet (html/images/urls) + matching POI par cluster...
+              Vérification WordPress (refresh seulement si nécessaire) + scan POI obligatoire...
             </div>
           ) : isError ? (
             <div className="rounded-lg border border-red-200 bg-red-50 p-3 text-sm text-red-700">{errorMessage || "Erreur scan"}</div>

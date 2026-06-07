@@ -1,6 +1,6 @@
 import { useState } from "react"
 import { NavLink, useNavigate } from "react-router-dom"
-import { LayoutDashboard, ListTodo, LogOut, Bell, BarChart3, Settings, Brain, ChevronDown, UserCircle2 } from "lucide-react"
+import { LayoutDashboard, ListTodo, LogOut, Bell, BarChart3, Settings, Brain, ChevronDown, UserCircle2, Database, Crosshair, Code2 } from "lucide-react"
 import { cn } from "@/lib/utils"
 import { useAuth } from "@/lib/AuthContext"
 
@@ -10,6 +10,9 @@ const navItems = [
   { to: "/signaux", label: "Signaux", icon: Bell },
   { to: "/reporting", label: "Reporting", icon: BarChart3 },
   { to: "/rattrapage-poi", label: "Rattrapage POI", icon: Brain },
+  { to: "/ingestions", label: "Ingestions", icon: Database },
+  { to: "/poi-mentions", label: "Revue POI", icon: Crosshair },
+  { to: "/reusable-blocks", label: "Blocs réutilis.", icon: Code2 },
 ]
 
 export function Sidebar() {

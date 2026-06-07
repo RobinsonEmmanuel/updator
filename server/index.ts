@@ -7,6 +7,9 @@ import draftsRouter from "./routes/drafts"
 import authRouter from "./routes/auth"
 import clusterMappingsRouter from "./routes/clusterMappings"
 import todoConfigRouter, { ensureTodoConfigSeeded } from "./routes/todoConfig"
+import ingestionsRouter from "./routes/ingestions"
+import poiMentionsRouter from "./routes/poiMentions"
+import reusableBlocksRouter from "./routes/reusableBlocks"
 import { requireAuth } from "./middleware/requireAuth"
 import { Signal } from "./models/Signal"
 import { Draft } from "./models/Draft"
@@ -25,6 +28,9 @@ app.use("/api/signals", requireAuth, signalsRouter)
 app.use("/api/drafts", requireAuth, draftsRouter)
 app.use("/api/cluster-mappings", requireAuth, clusterMappingsRouter)
 app.use("/api/todo-config", requireAuth, todoConfigRouter)
+app.use("/api/ingestions", requireAuth, ingestionsRouter)
+app.use("/api/poi-mentions", requireAuth, poiMentionsRouter)
+app.use("/api/reusable-blocks", requireAuth, reusableBlocksRouter)
 
 // Health check
 app.get("/api/health", (_req, res) => {

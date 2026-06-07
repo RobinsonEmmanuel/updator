@@ -11,6 +11,9 @@ import { Settings } from "@/pages/Settings"
 import { ClusterMappings } from "@/pages/ClusterMappings"
 import { PoiArticleCatchup } from "@/pages/PoiArticleCatchup"
 import { ArticleUpdateWorkspace } from "@/pages/ArticleUpdateWorkspace"
+import { Ingestions } from "@/pages/Ingestions"
+import { PoiMentions } from "@/pages/PoiMentions"
+import { ReusableBlocks } from "@/pages/ReusableBlocks"
 
 export const router = createBrowserRouter([
   {
@@ -59,6 +62,18 @@ export const router = createBrowserRouter([
           {
             path: "clusters",
             element: <ClusterMappings />,
+          },
+          {
+            path: "ingestions",
+            element: <Ingestions />,
+          },
+          {
+            path: "poi-mentions",
+            element: <PoiMentions />,
+          },
+          {
+            path: "reusable-blocks",
+            element: <ReusableBlocks />,
           },
         ],
       },

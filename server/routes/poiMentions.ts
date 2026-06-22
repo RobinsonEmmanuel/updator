@@ -30,6 +30,11 @@ async function fetchPoiJson(
   if (apiKey) headers.set("X-Api-Key", apiKey)
   const response = await fetch(`${ingestionBaseUrl()}${path}`, { ...init, headers })
   const data = await response.json().catch(() => ({ error: "Invalid JSON response" }))
+  // Convert 401/403 from ingestion service to 502 — a backend auth error must not
+  // trigger a frontend session expiry redirect.
+  if (response.status === 401 || response.status === 403) {
+    return { ok: false, status: 502, data: { error: "Service d'ingestion non autorisé. Vérifiez RL_INGESTION_API_KEY.", remoteStatus: response.status } }
+  }
   return { ok: response.ok, status: response.status, data }
 }
 

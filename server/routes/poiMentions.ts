@@ -305,7 +305,8 @@ router.post("/:mentionId/create-in-rl", async (req: Request, res: Response) => {
       airtable: { clusterId },
     }
 
-    const rlApiKey = process.env.RL_API_KEY_WRITE || "1575e063-c655-4a07-bba2-67d4c9292bcc"
+    const rlApiKey = process.env.RL_API_KEY || ""
+    if (!rlApiKey) return res.status(500).json({ error: "RL_API_KEY manquant dans les variables d'environnement" })
     const rlRes = await fetch("https://api-prod.regionlovers.ai/place-instance-drafts/create-from-explor", {
       method: "POST",
       headers: { "Content-Type": "application/json", "x-api-key": rlApiKey },

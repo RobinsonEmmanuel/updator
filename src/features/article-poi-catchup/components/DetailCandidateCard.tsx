@@ -1,6 +1,11 @@
 import { BookOpen, Info, Link2, RefreshCw, Trash2 } from "lucide-react"
 import { cn } from "@/lib/utils"
 import { decodeHtmlEntities } from "@/features/article-poi-catchup/domain"
+import {
+  formatPoiEntityKind,
+  formatPoiExtractionAction,
+  formatPoiRelevance,
+} from "@/features/article-poi-catchup/poiExtractionContract"
 import type { PoiCandidateGroup, RegionPoiLite } from "@/hooks"
 import type { PoiSuggestion } from "@/hooks/useArticlePoiCatchup"
 
@@ -134,6 +139,35 @@ export function DetailCandidateCard({
                 <span>{linkedClusterName}</span>
               </div>
             ) : null}
+            {(group.entity_kind || group.tourism_relevance || group.extraction_action || group.suggested_place_type) ? (
+              <div className="mt-1 flex flex-wrap gap-1 text-[10px]">
+                {group.entity_kind ? (
+                  <span className="rounded border border-blue-100 bg-blue-50 px-1.5 py-0.5 text-blue-700">
+                    {formatPoiEntityKind(group.entity_kind)}
+                  </span>
+                ) : null}
+                {group.suggested_place_type ? (
+                  <span className="rounded border border-stone-100 bg-stone-50 px-1.5 py-0.5 text-stone-600">
+                    type: {group.suggested_place_type.replace(/_/g, " ")}
+                  </span>
+                ) : null}
+                {group.tourism_relevance ? (
+                  <span className="rounded border border-orange-100 bg-orange-50 px-1.5 py-0.5 text-orange-700">
+                    {formatPoiRelevance(group.tourism_relevance)}
+                  </span>
+                ) : null}
+                {group.extraction_action ? (
+                  <span className="rounded border border-purple-100 bg-purple-50 px-1.5 py-0.5 text-purple-700">
+                    {formatPoiExtractionAction(group.extraction_action)}
+                  </span>
+                ) : null}
+                {group.is_geolocatable === false ? (
+                  <span className="rounded border border-stone-200 bg-stone-100 px-1.5 py-0.5 text-stone-500">
+                    non geolocalisable
+                  </span>
+                ) : null}
+              </div>
+            ) : null}
           </button>
 
           <div className="absolute top-2 right-2 flex items-center gap-1.5">
@@ -254,6 +288,15 @@ export function DetailCandidateCard({
             <div><strong>Occurrences (freq):</strong> {group.frequency}</div>
             <div><strong>Hits titres (h):</strong> {group.heading_hits} sur H1/H2/H3</div>
             <div><strong>Suggestions RL (sugg):</strong> {suggestions.length}</div>
+            {group.detection_confidence != null ? (
+              <div><strong>Confiance extraction:</strong> {Math.round(group.detection_confidence * 100)}%</div>
+            ) : null}
+            {group.evidence_text ? (
+              <div><strong>Extrait extraction:</strong> {decodeHtmlEntities(group.evidence_text)}</div>
+            ) : null}
+            {group.extraction_reason ? (
+              <div><strong>Raison extraction:</strong> {decodeHtmlEntities(group.extraction_reason)}</div>
+            ) : null}
             {isLinkedCandidate ? (
               <>
                 <div><strong>Place type (clé):</strong> {group.rl_place_type || linkedPoi?.place_type || "—"}</div>

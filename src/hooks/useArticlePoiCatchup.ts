@@ -1,6 +1,7 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
 import { ingestionApiUrl, ingestionFetch } from "@/lib/api"
 import { mapBacklogResponse } from "@/features/article-poi-catchup/articlePoiMapper"
+import type { PoiExtractionFields } from "@/features/article-poi-catchup/poiExtractionContract"
 import type { CreateRlBody, CreateRlResponse, ManualLinkResponse } from "@/types/articlePoiContract"
 
 export type PoiAssociationStatus = "pending" | "needs_review" | "linked" | "created" | "ignored"
@@ -34,7 +35,7 @@ export interface PoiSuggestion {
   mismatch_warning?: string
 }
 
-export interface PoiCandidateGroup {
+export interface PoiCandidateGroup extends PoiExtractionFields {
   candidate_id: string
   name: string
   source: "h1" | "h2" | "h3" | "title" | "body" | "fallback"
@@ -116,12 +117,23 @@ interface RecomputeResponse {
   }
 }
 
+interface DetectionStats {
+  rlSeeds: number
+  headingSeeds: number
+  wideSeeds: number
+  llmSeeds: number
+  totalDetected: number
+  stored: number
+  locked: number
+}
+
 interface RecomputeArticleResponse {
   success: boolean
   articleId: string
   result: "updated-pending" | "updated-needs-review" | "updated-linked" | "skipped-final"
   rlPlacesLoaded: number
   refreshed: boolean
+  detectionStats?: DetectionStats
 }
 
 interface SetScanValidationResponse {

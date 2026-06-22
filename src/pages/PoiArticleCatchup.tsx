@@ -111,6 +111,16 @@ export function PoiArticleCatchup() {
     applyRecomputedCandidateInPanel,
   } = detail
 
+  // Sync linkPanelRow with fresh backlog data after a recompute
+  useEffect(() => {
+    if (!linkPanelRow) return
+    const freshRow = (backlog.data?.data ?? []).find((r) => r.articleId === linkPanelRow.articleId)
+    if (!freshRow) return
+    if (freshRow.detectedCandidates !== linkPanelRow.detectedCandidates) {
+      setLinkPanelRow(freshRow)
+    }
+  }, [backlog.data])
+
   const panelCandidateGroups = useMemo(
     () => (linkPanelRow?.detectedCandidates || []),
     [linkPanelRow]

@@ -1,5 +1,6 @@
-import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query"
+import { useMutation, useQueries, useQuery, useQueryClient } from "@tanstack/react-query"
 import { apiFetch } from "@/lib/api"
+import type { PoiExtractionFields } from "@/features/article-poi-catchup/poiExtractionContract"
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -9,7 +10,7 @@ export interface PoiMentionReview {
   reviewedBy?: string
 }
 
-export interface PoiMention {
+export interface PoiMention extends PoiExtractionFields {
   _id: string
   article_id: string
   nom_dans_article: string
@@ -48,6 +49,12 @@ export interface PoiMentionArticleResponse {
   mentions: PoiMention[]
 }
 
+export interface PoiMentionArticleSummary {
+  articleId: string
+  article: PoiMentionArticleMeta
+  stats: PoiMentionArticleStats
+}
+
 export interface PoiMentionsListResponse {
   total: number
   page: number
@@ -72,13 +79,40 @@ export interface ArticleContent {
   markdown?: string
 }
 
+export interface PoiArticleReingestResult {
+  success?: boolean
+  articleId?: string
+  candidateId?: string
+  suggestionsCount?: number
+  refreshed?: boolean
+  refreshFromWp?: boolean
+  rlPlacesLoaded?: number
+  result?: string
+  candidate?: {
+    name?: string
+    suggestions?: unknown[]
+    updated_at?: string
+  }
+  detectionStats?: {
+    rlSeeds: number
+    headingSeeds: number
+    wideSeeds: number
+    llmSeeds: number
+    totalDetected: number
+    stored: number
+    locked: number
+  }
+  error?: string
+}
+
 // ─── Hooks ────────────────────────────────────────────────────────────────────
 
-export function usePoiMentionsStats() {
+export function usePoiMentionsStats(siteId?: string | null) {
   return useQuery<PoiMentionsStats>({
-    queryKey: ["poi-mentions-stats"],
+    queryKey: ["poi-mentions-stats", siteId ?? "all"],
     queryFn: async () => {
-      const res = await apiFetch("/api/poi-mentions/stats")
+      const qs = siteId ? `?site_id=${encodeURIComponent(siteId)}` : ""
+      const res = await apiFetch(`/api/poi-mentions/stats${qs}`)
       if (!res.ok) throw new Error("Impossible de récupérer les statistiques POI")
       return res.json()
     },
@@ -86,12 +120,13 @@ export function usePoiMentionsStats() {
   })
 }
 
-/** Fetches all pages to collect unique article IDs */
-export function usePoiMentionsArticleIds() {
+/** Fetches all pages to collect unique article IDs, filtered by site */
+export function usePoiMentionsArticleIds(siteId?: string | null) {
   return useQuery<string[]>({
-    queryKey: ["poi-mentions-article-ids"],
+    queryKey: ["poi-mentions-article-ids", siteId ?? "all"],
     queryFn: async () => {
-      const res = await apiFetch("/api/poi-mentions?page=1&limit=200")
+      const qs = siteId ? `&site_id=${encodeURIComponent(siteId)}` : ""
+      const res = await apiFetch(`/api/poi-mentions?page=1&limit=200${qs}`)
       if (!res.ok) throw new Error("Impossible de récupérer les mentions")
       const data: PoiMentionsListResponse = await res.json()
       const ids = Array.from(new Set(data.results.map((m) => m.article_id)))
@@ -111,6 +146,27 @@ export function usePoiMentionsByArticle(articleId: string | null) {
     },
     enabled: !!articleId,
     staleTime: 10000,
+  })
+}
+
+export function usePoiMentionArticleSummaries(articleIds: string[]) {
+  return useQueries({
+    queries: articleIds.map((articleId) => ({
+      queryKey: ["poi-mentions-article", articleId],
+      queryFn: async () => {
+        const res = await apiFetch(`/api/poi-mentions/article/${articleId}`)
+        if (!res.ok) throw new Error("Impossible de récupérer les mentions de cet article")
+        const data: PoiMentionArticleResponse = await res.json()
+        return data
+      },
+      enabled: !!articleId,
+      staleTime: 60000,
+      select: (data: PoiMentionArticleResponse): PoiMentionArticleSummary => ({
+        articleId,
+        article: data.article,
+        stats: data.stats,
+      }),
+    })),
   })
 }
 
@@ -146,6 +202,32 @@ export function useReviewPoiMention() {
       queryClient.invalidateQueries({ queryKey: ["poi-mentions-stats"] })
       // Optimistic-style: invalidate the specific mention
       queryClient.invalidateQueries({ queryKey: ["poi-mention", mentionId] })
+    },
+  })
+}
+
+export function useReingestPoiArticle() {
+  const queryClient = useQueryClient()
+  return useMutation<PoiArticleReingestResult, Error, { articleId: string }>({
+    mutationFn: async ({ articleId }: { articleId: string }) => {
+      const res = await apiFetch(`/api/poi-mentions/article/${articleId}/reingest`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+      })
+      const data = await res.json().catch(() => ({}))
+      if (!res.ok) {
+        if (res.status === 404) {
+          throw new Error("Route de relance introuvable. Redémarrez le serveur actualisation-sites.")
+        }
+        throw new Error((data as { error?: string }).error || "Échec de la relance")
+      }
+      return data
+    },
+    onSuccess: (_data, { articleId }) => {
+      queryClient.invalidateQueries({ queryKey: ["poi-mentions-article", articleId] })
+      queryClient.invalidateQueries({ queryKey: ["poi-mentions-stats"] })
+      queryClient.invalidateQueries({ queryKey: ["poi-mentions-article-ids"] })
+      queryClient.invalidateQueries({ queryKey: ["poi-article-content", articleId] })
     },
   })
 }

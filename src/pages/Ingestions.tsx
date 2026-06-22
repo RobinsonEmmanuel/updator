@@ -4,6 +4,11 @@ import { Globe, Server, Link2, Play, RefreshCw, CheckCircle2, XCircle, Clock, Al
 import { cn } from "@/lib/utils"
 import { useSiteContext } from "@/lib/SiteContext"
 import {
+  formatPoiEntityKind,
+  formatPoiExtractionAction,
+  formatPoiRelevance,
+} from "@/features/article-poi-catchup/poiExtractionContract"
+import {
   useIngestionStatus,
   useIngestionRuns,
   useTriggerIngestion,
@@ -229,9 +234,20 @@ function ArticleRawFields({ doc }: { doc: ArticleRaw }) {
       )}
       {doc.poi_candidates && doc.poi_candidates.length > 0 && (
         <Field label={`POI candidats (${doc.poi_candidates.length})`}>
-          <div className="flex flex-wrap gap-1">
+          <div className="space-y-1.5">
             {doc.poi_candidates.slice(0, 10).map((p) => (
-              <span key={p.candidate_id} className="px-1.5 py-0.5 bg-amber-50 text-amber-700 rounded text-xs">{p.name}</span>
+              <div key={p.candidate_id} className="rounded border border-amber-100 bg-amber-50 px-2 py-1 text-xs">
+                <div className="font-medium text-amber-800">{p.name}</div>
+                {(p.entity_kind || p.tourism_relevance || p.extraction_action || p.suggested_place_type) && (
+                  <div className="mt-0.5 flex flex-wrap gap-1 text-[10px] text-amber-700">
+                    {p.entity_kind && <span>{formatPoiEntityKind(p.entity_kind)}</span>}
+                    {p.suggested_place_type && <span>type: {p.suggested_place_type.replace(/_/g, " ")}</span>}
+                    {p.tourism_relevance && <span>{formatPoiRelevance(p.tourism_relevance)}</span>}
+                    {p.extraction_action && <span>{formatPoiExtractionAction(p.extraction_action)}</span>}
+                    {p.detection_confidence != null && <span>{Math.round(p.detection_confidence * 100)}%</span>}
+                  </div>
+                )}
+              </div>
             ))}
             {doc.poi_candidates.length > 10 && (
               <span className="text-stone-400 text-xs">+{doc.poi_candidates.length - 10} autres</span>
@@ -382,9 +398,6 @@ export function Ingestions() {
       },
     })
   }
-
-  const currentStatus = status?.status?.toLowerCase()
-  const isRunning = currentStatus === "queued" || currentStatus === "processing"
 
   return (
     <div className="p-6 max-w-4xl mx-auto space-y-6">

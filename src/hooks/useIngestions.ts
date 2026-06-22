@@ -1,5 +1,6 @@
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query"
 import { apiFetch } from "@/lib/api"
+import type { PoiExtractionFields } from "@/features/article-poi-catchup/poiExtractionContract"
 
 export interface IngestionRunCounts {
   ok: number
@@ -25,6 +26,8 @@ export interface IngestionRun {
   counts?: IngestionRunCounts
   totals?: IngestionRunTotals
 }
+
+export type IngestionRunSummary = IngestionRun
 
 export type IngestionStatus = IngestionRun | null
 
@@ -67,7 +70,7 @@ export interface ArticleRawWpSource {
   sync_run_id?: string
 }
 
-export interface ArticleRawPoiCandidate {
+export interface ArticleRawPoiCandidate extends PoiExtractionFields {
   candidate_id: string
   name: string
   source?: string

@@ -33,22 +33,67 @@ async function fetchPoiJson(
   return { ok: response.ok, status: response.status, data }
 }
 
+function normalizePoiName(value: unknown): string {
+  return String(value ?? "")
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, " ")
+    .trim()
+}
+
+function idFilter(value: string) {
+  return ObjectId.isValid(value)
+    ? { $or: [{ _id: new ObjectId(value) }, { _id: value }] }
+    : { _id: value }
+}
+
+type MentionLike = {
+  article_id?: unknown
+  nom_dans_article?: unknown
+  rl_poi_id?: unknown
+}
+
+function sendReingestRemoteResponse(res: Response, remote: { status: number; data: unknown }) {
+  if (remote.status === 401 || remote.status === 403) {
+    return res.status(502).json({
+      error: "Le service d'ingestion a refusé la relance POI. Vérifiez la clé API côté actualisation-sites.",
+      remoteStatus: remote.status,
+    })
+  }
+
+  return res.status(remote.status).json(remote.data)
+}
+
+async function getArticleForReingest(articleId: string) {
+  const db = await getServiceRedactionDb()
+  return db.collection("articles_raw").findOne(
+    idFilter(articleId),
+    { projection: { site_id: 1, poi_candidates: 1 } }
+  )
+}
+
 // GET /api/poi-mentions/stats
-router.get("/stats", async (_req: Request, res: Response) => {
+router.get("/stats", async (req: Request, res: Response) => {
   try {
-    const remote = await fetchPoiJson("/api/v1/poi-mentions/stats")
+    const site_id = req.query.site_id as string | undefined
+    const qs = site_id ? `?site_id=${encodeURIComponent(site_id)}` : ""
+    const remote = await fetchPoiJson(`/api/v1/poi-mentions/stats${qs}`)
     return res.status(remote.status).json(remote.data)
   } catch (error) {
     res.status(502).json({ error: "Service indisponible", details: error instanceof Error ? error.message : String(error) })
   }
 })
 
-// GET /api/poi-mentions?page=1&limit=50
+// GET /api/poi-mentions?page=1&limit=50&site_id=...
 router.get("/", async (req: Request, res: Response) => {
   try {
     const page = req.query.page || "1"
     const limit = req.query.limit || "50"
-    const remote = await fetchPoiJson(`/api/v1/poi-mentions?page=${page}&limit=${limit}`)
+    const site_id = req.query.site_id as string | undefined
+    console.log(`[poi-mentions GET /] site_id reçu = "${site_id ?? 'ABSENT'}"`)
+    const siteParam = site_id ? `&site_id=${encodeURIComponent(site_id)}` : ""
+    const remote = await fetchPoiJson(`/api/v1/poi-mentions?page=${page}&limit=${limit}${siteParam}`)
     return res.status(remote.status).json(remote.data)
   } catch (error) {
     res.status(502).json({ error: "Service indisponible", details: error instanceof Error ? error.message : String(error) })
@@ -87,6 +132,104 @@ router.get("/article-content/:articleId", async (req: Request, res: Response) =>
     res.json(doc)
   } catch (error) {
     res.status(500).json({ error: "Erreur lecture article", details: error instanceof Error ? error.message : String(error) })
+  }
+})
+
+// POST /api/poi-mentions/article/:articleId/reingest — relance la détection POI de l'article entier
+router.post("/article/:articleId/reingest", async (req: Request, res: Response) => {
+  try {
+    const { articleId } = req.params
+    const article = await getArticleForReingest(articleId)
+
+    if (!article) return res.status(404).json({ error: "Article introuvable" })
+
+    const remote = await fetchPoiJson(`/api/v1/article-poi/${articleId}/recompute`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        ...(req.headers.authorization ? { Authorization: req.headers.authorization } : {}),
+      },
+      body: JSON.stringify({
+        siteId: String(article.site_id),
+        force: true,
+      }),
+    })
+
+    return sendReingestRemoteResponse(res, remote)
+  } catch (error) {
+    res.status(502).json({ error: "Service indisponible", details: error instanceof Error ? error.message : String(error) })
+  }
+})
+
+// POST /api/poi-mentions/:mentionId/reingest — relance le recompute du candidat POI associé
+router.post("/:mentionId/reingest", async (req: Request, res: Response) => {
+  try {
+    const { mentionId } = req.params
+    const authHeader = req.headers.authorization
+    const db = await getServiceRedactionDb()
+
+    let mention = await db.collection<MentionLike>("article_poi_mentions").findOne(idFilter(mentionId))
+
+    if (!mention) {
+      const remoteMention = await fetchPoiJson(`/api/v1/poi-mentions/${mentionId}`)
+      if (remoteMention.ok && remoteMention.data && typeof remoteMention.data === "object") {
+        mention = remoteMention.data as MentionLike
+      }
+    }
+
+    if (!mention) return res.status(404).json({ error: "Mention POI introuvable" })
+
+    const articleId = String(mention.article_id || "")
+    const article = await db.collection("articles_raw").findOne(
+      idFilter(articleId),
+      { projection: { site_id: 1, poi_candidates: 1 } }
+    )
+
+    if (!article) return res.status(404).json({ error: "Article introuvable" })
+
+    const candidates = Array.isArray(article.poi_candidates) ? article.poi_candidates : []
+    const mentionName = normalizePoiName(mention.nom_dans_article)
+    const mentionRlPoiId = String(mention.rl_poi_id || "")
+
+    const candidate = candidates.find((item) => {
+      const candidateRecord = item as Record<string, unknown>
+      if (mentionRlPoiId && candidateRecord.rl_place_id === mentionRlPoiId) return true
+      return normalizePoiName(candidateRecord.name) === mentionName
+    }) as Record<string, unknown> | undefined
+
+    if (!candidate?.candidate_id) {
+      const remote = await fetchPoiJson(`/api/v1/article-poi/${articleId}/candidate/mark`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          ...(authHeader ? { Authorization: authHeader } : {}),
+        },
+        body: JSON.stringify({
+          siteId: String(article.site_id),
+          candidateName: String(mention.nom_dans_article || ""),
+          source: "body",
+        }),
+      })
+
+      return sendReingestRemoteResponse(res, remote)
+    }
+
+    const remote = await fetchPoiJson(`/api/v1/article-poi/${articleId}/candidate/recompute`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        ...(authHeader ? { Authorization: authHeader } : {}),
+      },
+      body: JSON.stringify({
+        siteId: String(article.site_id),
+        candidateId: String(candidate.candidate_id),
+        refreshFromWp: true,
+      }),
+    })
+
+    return sendReingestRemoteResponse(res, remote)
+  } catch (error) {
+    res.status(502).json({ error: "Service indisponible", details: error instanceof Error ? error.message : String(error) })
   }
 })
 

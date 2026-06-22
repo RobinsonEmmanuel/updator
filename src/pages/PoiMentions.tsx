@@ -15,6 +15,7 @@ import {
   usePoiArticleContent,
   useReviewPoiMention,
   useReingestPoiArticle,
+  useCreatePoiInRl,
 } from "@/hooks/usePoiMentions"
 import type { PoiMention, PoiMentionArticleResponse, PoiMentionArticleSummary, PoiArticleReingestResult } from "@/hooks/usePoiMentions"
 import { useArticlePoiRecompute } from "@/hooks/useArticlePoiCatchup"
@@ -199,6 +200,8 @@ interface MentionCardProps {
   mention: PoiMention
   sessionReview?: SessionReview
   onReview: (mentionId: string, action: "approve" | "reject") => void
+  onCreateInRl: (mentionId: string) => void
+  isCreating: boolean
   isLoading: boolean
   isSelected: boolean
   onSelect: () => void
@@ -208,6 +211,8 @@ function MentionCard({
   mention,
   sessionReview,
   onReview,
+  onCreateInRl,
+  isCreating,
   isLoading,
   isSelected,
   onSelect,
@@ -274,13 +279,13 @@ function MentionCard({
             <>
               <button
                 type="button"
-                disabled
-                onClick={(event) => { event.stopPropagation() }}
-                className="flex items-center gap-1 px-2.5 py-1.5 rounded-lg text-xs font-medium bg-white border border-amber-300 text-amber-700 opacity-60 cursor-not-allowed"
-                title="Création dans la base — disponible prochainement"
+                disabled={isCreating || isLoading}
+                onClick={(event) => { event.stopPropagation(); onCreateInRl(mention._id) }}
+                className="flex items-center gap-1 px-2.5 py-1.5 rounded-lg text-xs font-medium bg-white border border-amber-300 text-amber-700 hover:bg-amber-50 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                title="Créer ce POI dans la base Region Lovers"
               >
-                <MapPin className="h-3.5 w-3.5" />
-                Créer dans la base
+                {isCreating ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <MapPin className="h-3.5 w-3.5" />}
+                {isCreating ? "Création…" : "Créer dans la base"}
               </button>
               <button
                 type="button"
@@ -402,6 +407,8 @@ function ArticleDetail({ articleId, sessionReviews, onReview }: ArticleDetailPro
   const { data: content, isLoading: loadingContent } = usePoiArticleContent(articleId)
   const reviewMutation = useReviewPoiMention()
   const reingestMutation = useReingestPoiArticle()
+  const createInRlMutation = useCreatePoiInRl()
+  const [creatingMentionId, setCreatingMentionId] = useState<string | null>(null)
   const [selectedMentionId, setSelectedMentionId] = useState<string | null>(null)
   const [reingestError, setReingestError] = useState<string | null>(null)
   const [reingestResult, setReingestResult] = useState<PoiArticleReingestResult | null>(null)
@@ -414,6 +421,13 @@ function ArticleDetail({ articleId, sessionReviews, onReview }: ArticleDetailPro
     const mention = mentionData?.mentions.find((m) => m._id === mentionId)
     onReview(mentionId, articleId, mention?.nom_dans_article ?? mentionId, action)
     reviewMutation.mutate({ mentionId, action })
+  }
+
+  const handleCreateInRl = (mentionId: string) => {
+    setCreatingMentionId(mentionId)
+    createInRlMutation.mutate({ mentionId }, {
+      onSettled: () => setCreatingMentionId(null),
+    })
   }
 
   if (loadingMentions) {
@@ -571,6 +585,8 @@ function ArticleDetail({ articleId, sessionReviews, onReview }: ArticleDetailPro
                 mention={mention}
                 sessionReview={sessionReview}
                 onReview={handleReview}
+                onCreateInRl={handleCreateInRl}
+                isCreating={creatingMentionId === mention._id}
                 isLoading={reviewMutation.isPending}
                 isSelected={activeMentionId === mention._id}
                 onSelect={() => setSelectedMentionId(mention._id)}

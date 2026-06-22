@@ -206,6 +206,22 @@ export function useReviewPoiMention() {
   })
 }
 
+export function useCreatePoiInRl() {
+  const queryClient = useQueryClient()
+  return useMutation<{ success: boolean; geoFound: boolean; data: unknown }, Error, { mentionId: string }>({
+    mutationFn: async ({ mentionId }) => {
+      const res = await apiFetch(`/api/poi-mentions/${mentionId}/create-in-rl`, { method: "POST" })
+      const data = await res.json().catch(() => ({}))
+      if (!res.ok) throw new Error((data as { error?: string }).error || "Échec de la création")
+      return data
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["poi-mentions-article"] })
+      queryClient.invalidateQueries({ queryKey: ["poi-mentions-stats"] })
+    },
+  })
+}
+
 export function useReingestPoiArticle() {
   const queryClient = useQueryClient()
   return useMutation<PoiArticleReingestResult, Error, { articleId: string }>({

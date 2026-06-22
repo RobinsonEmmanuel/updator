@@ -238,6 +238,91 @@ router.post("/:mentionId/reingest", async (req: Request, res: Response) => {
   }
 })
 
+// POST /api/poi-mentions/:mentionId/create-in-rl — crée le POI dans la base RL
+router.post("/:mentionId/create-in-rl", async (req: Request, res: Response) => {
+  try {
+    const { mentionId } = req.params
+    const db = await getServiceRedactionDb()
+
+    // Trouver l'article qui contient ce candidat
+    const article = await db.collection("articles_raw").findOne(
+      { "poi_candidates.candidate_id": mentionId },
+      { projection: { primary_cluster_id: 1, title: 1, poi_candidates: 1 } }
+    )
+    if (!article) return res.status(404).json({ error: "Candidat POI introuvable" })
+
+    const candidates = Array.isArray(article.poi_candidates) ? article.poi_candidates : []
+    const candidate = candidates.find((c: Record<string, unknown>) => c.candidate_id === mentionId) as Record<string, unknown> | undefined
+    if (!candidate) return res.status(404).json({ error: "Candidat introuvable dans l'article" })
+
+    const poiName = String(candidate.name || "")
+    const placeType = String(candidate.suggested_place_type || candidate.entity_kind || "tourist_attraction")
+    const clusterId = String(article.primary_cluster_id || "")
+
+    if (!poiName) return res.status(400).json({ error: "Nom du POI manquant" })
+    if (!clusterId) return res.status(400).json({ error: "Cluster ID manquant sur l'article" })
+
+    // Géolocalisation via Photon
+    let geoLat: number | null = null
+    let geoLon: number | null = null
+    try {
+      const photonUrl = `https://photon.komoot.io/api/?q=${encodeURIComponent(poiName)}&limit=1&lang=fr`
+      const photonRes = await fetch(photonUrl)
+      if (photonRes.ok) {
+        const photonData = await photonRes.json() as { features?: Array<{ geometry?: { coordinates?: number[] } }> }
+        const coords = photonData.features?.[0]?.geometry?.coordinates
+        if (coords && coords.length >= 2) {
+          geoLon = coords[0]
+          geoLat = coords[1]
+        }
+      }
+    } catch {
+      // Coordonnées non trouvées — on crée quand même sans GPS
+    }
+
+    // Payload RL
+    const geographyFields: Array<{ field_id: string; value: number }> = []
+    if (geoLat !== null && geoLon !== null) {
+      geographyFields.push({ field_id: "geo_lat", value: geoLat })
+      geographyFields.push({ field_id: "geo_lon", value: geoLon })
+    }
+
+    const rlPayload = {
+      place_type: placeType,
+      blocks: [{
+        block_id: "general_info",
+        sections: [
+          {
+            section_id: "general_info_general",
+            fields: [{ field_id: "name", value: poiName }],
+          },
+          ...(geographyFields.length > 0 ? [{
+            section_id: "general_info_geography",
+            fields: geographyFields,
+          }] : []),
+        ],
+      }],
+      airtable: { clusterId },
+    }
+
+    const rlApiKey = process.env.RL_API_KEY_WRITE || "1575e063-c655-4a07-bba2-67d4c9292bcc"
+    const rlRes = await fetch("https://api-prod.regionlovers.ai/place-instance-drafts/create-from-explor", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "x-api-key": rlApiKey },
+      body: JSON.stringify(rlPayload),
+    })
+
+    const rlData = await rlRes.json().catch(() => ({}))
+    if (!rlRes.ok) {
+      return res.status(502).json({ error: "Erreur création POI dans RL", details: rlData })
+    }
+
+    res.json({ success: true, geoFound: geoLat !== null, data: rlData })
+  } catch (error) {
+    res.status(500).json({ error: "Erreur création POI", details: error instanceof Error ? error.message : String(error) })
+  }
+})
+
 // PATCH /api/poi-mentions/:mentionId — approve or reject
 router.patch("/:mentionId", async (req: Request, res: Response) => {
   try {

@@ -40,6 +40,23 @@ app.get("/api/health", (_req, res) => {
   res.json({ status: "ok", timestamp: new Date().toISOString() })
 })
 
+// Proxy /api/v1/* → ingestion service
+const ingestionServiceUrl = (process.env.INGESTION_SERVICE_URL || "http://localhost:4001").trim().replace(/\/$/, "")
+app.use("/api/v1", async (req, res) => {
+  const target = `${ingestionServiceUrl}/api/v1${req.url}`
+  try {
+    const headers: Record<string, string> = { "Content-Type": "application/json" }
+    if (req.headers.authorization) headers["Authorization"] = req.headers.authorization
+    if (process.env.RL_INGESTION_API_KEY) headers["X-Api-Key"] = process.env.RL_INGESTION_API_KEY
+    const body = ["GET", "HEAD"].includes(req.method) ? undefined : JSON.stringify(req.body)
+    const upstream = await fetch(target, { method: req.method, headers, body })
+    const data = await upstream.text()
+    res.status(upstream.status).set("Content-Type", upstream.headers.get("Content-Type") || "application/json").send(data)
+  } catch (err) {
+    res.status(502).json({ error: "Ingestion service indisponible", details: err instanceof Error ? err.message : String(err) })
+  }
+})
+
 // Serve Vite build in production
 const __dirname = dirname(fileURLToPath(import.meta.url))
 const distPath = join(__dirname, "../dist")

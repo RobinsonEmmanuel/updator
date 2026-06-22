@@ -1,6 +1,9 @@
 import express from "express"
 import cors from "cors"
 import compression from "compression"
+import { join, dirname } from "path"
+import { fileURLToPath } from "url"
+import { existsSync } from "fs"
 import { connectDB } from "./db"
 import signalsRouter from "./routes/signals"
 import draftsRouter from "./routes/drafts"
@@ -36,6 +39,16 @@ app.use("/api/reusable-blocks", requireAuth, reusableBlocksRouter)
 app.get("/api/health", (_req, res) => {
   res.json({ status: "ok", timestamp: new Date().toISOString() })
 })
+
+// Serve Vite build in production
+const __dirname = dirname(fileURLToPath(import.meta.url))
+const distPath = join(__dirname, "../dist")
+if (existsSync(distPath)) {
+  app.use(express.static(distPath))
+  app.get("*", (_req, res) => {
+    res.sendFile(join(distPath, "index.html"))
+  })
+}
 
 async function seedIfEmpty() {
   const signalCount = await Signal.countDocuments()

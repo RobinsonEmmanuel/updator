@@ -6,6 +6,7 @@
   "scripts": {
     "dev": "vite",
     "server": "tsx server/index.ts",
+    "start": "tsx server/index.ts",
     "dev:all": "concurrently -k \"npm run server\" \"wait-on http://127.0.0.1:3001/api/health && npm run dev\"",
     "preview:all": "concurrently -k \"npm run server\" \"wait-on http://127.0.0.1:3001/api/health && npm run preview\"",
     "seed:sites": "tsx server/scripts/seedSites.ts",

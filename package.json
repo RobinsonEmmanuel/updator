@@ -75,6 +75,9 @@
     "vitest": "^4.1.0",
     "wait-on": "^9.0.4"
   },
+  "engines": {
+    "node": ">=20"
+  },
   "description": "This template provides a minimal setup to get React working in Vite with HMR and some ESLint rules.",
   "main": "eslint.config.js",
   "directories": {
